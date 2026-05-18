@@ -1,7 +1,9 @@
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
-import pdf from "pdf-parse";
+import _pdf from "pdf-parse";
+// @ts-ignore
+const { PDFParse } = _pdf;
 import { getEmbedding, analyzeDocumentStructure, performOCR } from "../lib/gemini";
 import { addDocumentsToVectorDB, clearManualCollection } from "../lib/chroma";
 
@@ -15,29 +17,29 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
  */
 async function parsePdfByPages(pdfPath: string): Promise<string[]> {
   const dataBuffer = fs.readFileSync(pdfPath);
-  const pages: string[] = [];
+  // modern PDFParse 인스턴스 생성 및 로드
+  const parser = new PDFParse({ data: new Uint8Array(dataBuffer) });
+  await parser.load();
+  
+  // 페이지 데이터 획득
+  const res = await parser.getText();
+  // 페이지 번호 순으로 정렬
+  const sortedPages = res.pages.sort((a: any, b: any) => a.num - b.num);
+  return sortedPages.map((page: any) => page.text);
+}
 
-  // pdf-parse 커스텀 페이지 렌더러를 정의하여 페이지별로 텍스트 분리
-  const options = {
-    pagerender: function (pageData: any) {
-      return pageData.getTextContent().then(function (textContent: any) {
-        let lastY = "", text = "";
-        for (const item of textContent.items) {
-          if (lastY === item.transform[5] || !lastY) {
-            text += item.str;
-          } else {
-            text += "\n" + item.str;
-          }
-          lastY = item.transform[5];
-        }
-        pages.push(text);
-        return text;
-      });
-    }
-  };
-
-  await pdf(dataBuffer, options);
-  return pages;
+/**
+ * Gemini API 호출 중 발생할 수 있는 일시적 장애(503) 및 속도 제한(429)을 방지하기 위한 지수 백오프 기반 재시도 유틸리티
+ */
+async function retryWithDelay<T>(fn: () => Promise<T>, retries = 3, delayMs = 3000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries <= 0) throw error;
+    console.warn(`[Gemini API 오류 발생] ${delayMs}ms 후 재시도합니다... (남은 횟수: ${retries})`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return retryWithDelay(fn, retries - 1, delayMs * 1.5);
+  }
 }
 
 /**
@@ -87,11 +89,11 @@ async function runIngestion() {
       console.log(`[페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
       
       // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존)
-      const structuredText = await analyzeDocumentStructure(rawText);
+      const structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
 
       console.log(`[페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
       // Gemini Embedding API 호출
-      const vector = await getEmbedding(structuredText);
+      const vector = await retryWithDelay(() => getEmbedding(structuredText));
 
       documentsToIngest.push({
         id: `pdf_page_${pageNum}`,
@@ -103,6 +105,9 @@ async function runIngestion() {
           type: "pdf"
         }
       });
+
+      // API Rate Limit 방지를 위한 짧은 딜레이
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
 
     // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원
@@ -123,11 +128,11 @@ async function runIngestion() {
         if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
 
         // Gemini Vision을 통한 OCR 텍스트 추출 및 정형화
-        const ocrText = await performOCR(imageBuffer, mimeType);
+        const ocrText = await retryWithDelay(() => performOCR(imageBuffer, mimeType));
         console.log(`OCR 텍스트 추출 완료! 내용 길이: ${ocrText.length}`);
 
         console.log(`[${file}] 텍스트 임베딩 생성 중...`);
-        const vector = await getEmbedding(ocrText);
+        const vector = await retryWithDelay(() => getEmbedding(ocrText));
 
         documentsToIngest.push({
           id: `image_ocr_${file.replace(/\.[^/.]+$/, "")}`,
@@ -139,6 +144,9 @@ async function runIngestion() {
             type: "image_ocr"
           }
         });
+
+        // API Rate Limit 방지를 위한 짧은 딜레이
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
 

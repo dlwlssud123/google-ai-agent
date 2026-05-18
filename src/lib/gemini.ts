@@ -1,11 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// 환경 변수에서 GEMINI_API_KEY 로드
-const apiKey = process.env.GEMINI_API_KEY || "";
-
 let genAIInstance: GoogleGenerativeAI | null = null;
 
 export function getGeminiClient(): GoogleGenerativeAI {
+  const apiKey = process.env.GEMINI_API_KEY || "";
   if (!apiKey) {
     console.error("경고: GEMINI_API_KEY 환경 변수가 세팅되어 있지 않습니다. .env.local 파일을 확인해 주세요.");
   }
@@ -15,10 +13,10 @@ export function getGeminiClient(): GoogleGenerativeAI {
   return genAIInstance;
 }
 
-// 텍스트 임베딩 모델 (Google의 최신 텍스트 임베딩 모델 사용)
-export const EMBEDDING_MODEL_NAME = "text-embedding-004";
+// 텍스트 임베딩 모델 (Gemini 2.x 규격의 최신 다국어 지원 임베딩 모델 사용)
+export const EMBEDDING_MODEL_NAME = "gemini-embedding-2";
 // 기본 텍스트 및 멀티모달 모델
-export const GENERATIVE_MODEL_NAME = "gemini-1.5-flash"; // 속도가 빠르고 멀티모달성 우수
+export const GENERATIVE_MODEL_NAME = "gemini-2.5-flash"; // 최신 고성능 멀티모달 모델
 
 /**
  * 주어진 텍스트의 임베딩 벡터를 반환합니다.
