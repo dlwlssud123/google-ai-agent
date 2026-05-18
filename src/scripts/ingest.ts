@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
-import _pdf from "pdf-parse";
+import * as _pdf from "pdf-parse";
 // @ts-ignore
 const { PDFParse } = _pdf;
 import { getEmbedding, analyzeDocumentStructure, performOCR } from "../lib/gemini";
@@ -19,9 +19,9 @@ async function parsePdfByPages(pdfPath: string): Promise<string[]> {
   const dataBuffer = fs.readFileSync(pdfPath);
   // modern PDFParse 인스턴스 생성 및 로드
   const parser = new PDFParse({ data: new Uint8Array(dataBuffer) });
-  await parser.load();
   
-  // 페이지 데이터 획득
+  // 페이지 데이터 획득 (내부적으로 로드가 자동 처리됨)
+  // @ts-ignore
   const res = await parser.getText();
   // 페이지 번호 순으로 정렬
   const sortedPages = res.pages.sort((a: any, b: any) => a.num - b.num);
