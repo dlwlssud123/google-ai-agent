@@ -44,6 +44,32 @@ async function retryWithDelay<T>(fn: () => Promise<T>, retries = 3, delayMs = 30
 }
 
 /**
+ * 제한된 동시성(Concurrency)으로 비동기 작업을 병렬 처리하는 유틸리티 헬퍼 함수
+ */
+async function runConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  const queue = [...items.entries()];
+  
+  const workers = Array(Math.min(concurrency, items.length)).fill(null).map(async () => {
+    while (queue.length > 0) {
+      const next = queue.shift();
+      if (!next) break;
+      const [index, item] = next;
+      results[index] = await fn(item, index);
+      // API Rate Limit (RPM) 안정을 위해 작업 사이사이에 아주 미세한 지연 제공
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  });
+  
+  await Promise.all(workers);
+  return results;
+}
+
+/**
  * 인제스천 메인 실행 함수 (웹/서버액션에서 임포트 가능하도록 export)
  * @param options clearDB: true이면 ChromaDB를 초기화하고 data/ 폴더 전체를 새로 적재합니다.
  */
@@ -88,7 +114,7 @@ export async function runIngestion(options = { clearDB: true }) {
     // 갱신 시 발생하는 Gemini API 2.5 LLM 모델 쿼터 소모를 0으로 낮추기 위해
     // 디폴트값으로 skipLLMStructure를 true로 고정합니다. (원시 텍스트와 임베딩만으로 신속 안전 적재)
     let skipLLMStructure = true;
-    const documentsToIngest = [];
+    const documentsToIngest: any[] = [];
 
     // 각 PDF 파일 순회하며 처리
     for (const pdfFile of pdfFiles) {
@@ -142,14 +168,17 @@ export async function runIngestion(options = { clearDB: true }) {
 
       let activePageCount = 0;
 
-      // 3. 페이지별 데이터 정제 및 적재 준비
-      for (let i = 0; i < rawPages.length; i++) {
+      // 3. 페이지별 데이터 정제 및 적재 준비 (동시성 3 병렬 처리 적용하여 초고속 임베딩 생성)
+      console.log(`[${pdfFile}] 임베딩 파이프라인 병렬화 가동 (동시성 한도: 3)...`);
+      const pageIndices = Array.from({ length: rawPages.length }, (_, idx) => idx);
+
+      await runConcurrent(pageIndices, 3, async (i) => {
         const pageNum = i + 1;
         const rawText = rawPages[i].trim();
 
         if (!rawText) {
           console.log(`[${pdfFile} - 페이지 ${pageNum}] 텍스트가 비어 있어 건너뜁니다.`);
-          continue;
+          return;
         }
 
         activePageCount++;
@@ -158,14 +187,11 @@ export async function runIngestion(options = { clearDB: true }) {
         if (!skipLLMStructure) {
           console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
           try {
-            // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존) 시도
             structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
           } catch (llmError) {
             console.warn(`[경고] Gemini LLM 구조 정제 실패 (할당량 초과 또는 API 오류). 이후 페이지부터 구조 정제를 건너뛰고 원시 텍스트를 그대로 사용합니다. 에러: ${(llmError as any).message || llmError}`);
             skipLLMStructure = true;
           }
-        } else {
-          console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 정제 건너뜀 (토큰 세이버 활성화)`);
         }
 
         console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
@@ -183,10 +209,7 @@ export async function runIngestion(options = { clearDB: true }) {
             type: "pdf"
           }
         });
-
-        // API Rate Limit 방지를 위한 짧은 딜레이
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
+      });
 
       // 인제스천이 완료된 파일 상태를 DB에 성공(success)으로 업데이트
       if (activePageCount > 0) {
@@ -196,17 +219,23 @@ export async function runIngestion(options = { clearDB: true }) {
       }
     }
 
-    // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원
+    // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원 (동시성 2 병렬 처리 적용)
     const imageExtensions = [".png", ".jpg", ".jpeg"];
+    const imageFilesToProcess = filesInDocs.filter(file => {
+      const ext = path.extname(file).toLowerCase();
+      return imageExtensions.includes(ext);
+    });
+
     let virtualPageNum = 100; // 이미지 파일은 가상의 100번대 페이지부터 할당
 
-    for (const file of filesInDocs) {
-      const ext = path.extname(file).toLowerCase();
-      if (imageExtensions.includes(ext)) {
+    if (imageFilesToProcess.length > 0) {
+      console.log(`\n[비정형 이미지 발견] 총 ${imageFilesToProcess.length}개 이미지 병렬 OCR 및 임베딩 처리 가동...`);
+      await runConcurrent(imageFilesToProcess, 2, async (file) => {
+        const ext = path.extname(file).toLowerCase();
         const safeImageId = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
         try {
           const imagePath = path.join(dataDir, file);
-          console.log(`\n[비정형 이미지 발견] 이미지 OCR 처리 중: ${file}`);
+          console.log(`이미지 OCR 처리 중: ${file}`);
           
           addManual(file, fs.statSync(imagePath).size);
           const imageBuffer = fs.readFileSync(imagePath);
@@ -216,7 +245,7 @@ export async function runIngestion(options = { clearDB: true }) {
 
           // Gemini Vision을 통한 OCR 텍스트 추출 및 정형화
           const ocrText = await retryWithDelay(() => performOCR(imageBuffer, mimeType));
-          console.log(`OCR 텍스트 추출 완료! 내용 길이: ${ocrText.length}`);
+          console.log(`OCR 텍스트 추출 완료! 내용 길이: ${ocrText.length} (${file})`);
 
           console.log(`[${file}] 텍스트 임베딩 생성 중...`);
           const vector = await retryWithDelay(() => getEmbedding(ocrText));
@@ -237,10 +266,7 @@ export async function runIngestion(options = { clearDB: true }) {
           console.error(`[오류] 이미지 ${file} OCR 처리 실패. 이 이미지는 건너뜁니다. 에러: ${(imageError as any).message || imageError}`);
           updateManualStatus(safeImageId, "failed");
         }
-
-        // API Rate Limit 방지를 위한 짧은 딜레이
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
+      });
     }
 
     // 5. ChromaDB 최종 적재
