@@ -2,6 +2,20 @@
 
 import { useState, useRef, useEffect } from "react";
 import { askAgent, ChatMessage, ChatResponse } from "./actions/chat";
+import { 
+  uploadAndIngestFileAction, 
+  getUploadedFilesAction, 
+  deleteManualAction,
+  forceRunIngestionAction 
+} from "./actions/ingestActions";
+
+export interface ManualFile {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  uploadedAt: string;
+  status: "pending" | "success" | "failed";
+}
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -10,7 +24,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // 파일 업로드 및 실시간 RAG 적재 상태 관리
+  const [manualFiles, setManualFiles] = useState<ManualFile[]>([]);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionStage, setActionStage] = useState<"idle" | "uploading" | "ingesting" | "success" | "error">("idle");
+  const [actionMessage, setActionMessage] = useState("");
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 스크롤 동기화
   const scrollToBottom = () => {
@@ -20,6 +41,117 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
+
+  // 마운트 시 실시간 적재된 파일 목록 조회
+  useEffect(() => {
+    fetchUploadedFiles();
+  }, []);
+
+  const fetchUploadedFiles = async () => {
+    try {
+      const res = await getUploadedFilesAction();
+      if (res.success && res.files) {
+        setManualFiles(res.files as ManualFile[]);
+      }
+    } catch (e) {
+      console.error("파일 목록 패치 실패:", e);
+    }
+  };
+
+  // 파일 업로드 및 실시간 임베딩 핸들러
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setActionLoading(true);
+    setActionStage("uploading");
+    setActionMessage(`'${file.name}' 업로드 파일 처리 중...`);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      // 1단계: 파일 전송 및 백엔드 즉각 임베딩 트리거
+      setActionStage("ingesting");
+      setActionMessage("Gemini 임베딩 변환 및 ChromaDB 실시간 적재 중...");
+      
+      const res = await uploadAndIngestFileAction(formData);
+
+      if (res.success) {
+        setActionStage("success");
+        setActionMessage(res.message || "성공적으로 적재 완료!");
+        setTimeout(() => setActionStage("idle"), 4000);
+      } else {
+        setActionStage("error");
+        setActionMessage(res.message || "적재 실패");
+      }
+    } catch (err: any) {
+      setActionStage("error");
+      setActionMessage(`처리 오류: ${err.message || err}`);
+    } finally {
+      setActionLoading(false);
+      fetchUploadedFiles();
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // 특정 파일 영구 삭제 핸들러
+  const handleFileDelete = async (id: string, name: string) => {
+    if (!confirm(`'${name}' 매뉴얼을 로컬 디스크 및 ChromaDB 벡터 저장소에서 완벽히 영구 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    setActionLoading(true);
+    setActionStage("ingesting");
+    setActionMessage(`'${name}' 연관 임베딩 삭제 중...`);
+
+    try {
+      const res = await deleteManualAction(id);
+      if (res.success) {
+        setActionStage("success");
+        setActionMessage(res.message || "삭제 성공");
+        setTimeout(() => setActionStage("idle"), 3000);
+      } else {
+        setActionStage("error");
+        setActionMessage(res.message || "삭제 실패");
+      }
+    } catch (err: any) {
+      setActionStage("error");
+      setActionMessage(`삭제 중 오류: ${err.message || err}`);
+    } finally {
+      setActionLoading(false);
+      fetchUploadedFiles();
+    }
+  };
+
+  // 데이터베이스 인제스천 초기화 강제 갱신 핸들러
+  const handleForceRebuild = async () => {
+    if (!confirm("ChromaDB 컬렉션을 완전히 비운 후 data/ 디렉터리 내의 모든 파일로 처음부터 임베딩을 다시 빌드하시겠습니까?\n(수 분 가량 소요될 수 있습니다)")) {
+      return;
+    }
+
+    setActionLoading(true);
+    setActionStage("ingesting");
+    setActionMessage("벡터 컬렉션 클리어 및 전체 매뉴얼 재임베딩 생성 중...");
+
+    try {
+      const res = await forceRunIngestionAction();
+      if (res.success) {
+        setActionStage("success");
+        setActionMessage(res.message || "전체 재임베딩 완료!");
+        setTimeout(() => setActionStage("idle"), 4000);
+      } else {
+        setActionStage("error");
+        setActionMessage(res.message || "재임베딩 실패");
+      }
+    } catch (err: any) {
+      setActionStage("error");
+      setActionMessage(`동작 실패: ${err.message || err}`);
+    } finally {
+      setActionLoading(false);
+      fetchUploadedFiles();
+    }
+  };
 
   // 빠른 시작(Quick Starter) 질문 모음
   const quickQuestions = [
@@ -83,6 +215,16 @@ export default function Home() {
     return `${baseName} (p.${citation.page})`;
   };
 
+  // 파일 사이즈 사람이 읽기 좋은 포맷
+  const formatBytes = (bytes: number, decimals = 1) => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+  };
+
   // 마크다운 파싱 렌더러
   const renderMarkdown = (text: string) => {
     return text.split("\n").map((line, idx) => {
@@ -134,7 +276,7 @@ export default function Home() {
     return parts.map((part, i) => {
       if (i % 2 === 1) {
         // WARNING, 경고 구문 감지하여 초고휘도 경고 스타일 반영
-        if (part.includes("경고") || part.includes("WARNING") || part.includes("fail-safe")) {
+        if (part.includes("경고") || part.includes("WARNING") || part.includes("fail-safe") || part.includes("금하며") || part.includes("격리")) {
           return (
             <strong
               key={i}
@@ -160,9 +302,9 @@ export default function Home() {
       <aside
         className={`${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } fixed inset-y-0 left-0 z-50 w-72 bg-zinc-900 border-r border-zinc-800 p-5 transition-transform duration-300 lg:relative lg:translate-x-0 flex flex-col shrink-0`}
+        } fixed inset-y-0 left-0 z-50 w-80 bg-zinc-900 border-r border-zinc-800 p-5 transition-transform duration-300 lg:relative lg:translate-x-0 flex flex-col shrink-0`}
       >
-        <div className="flex items-center justify-between pb-5 border-b border-zinc-800">
+        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-600/30">
               <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -170,8 +312,8 @@ export default function Home() {
               </svg>
             </div>
             <div>
-              <h2 className="text-base font-bold text-white tracking-wide">UnHarnesedYU</h2>
-              <span className="text-[10px] text-zinc-400 font-semibold tracking-wider uppercase">RAG AI Agent</span>
+              <h2 className="text-sm font-bold text-white tracking-wide">UnHarnesedYU</h2>
+              <span className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">RAG Control Center</span>
             </div>
           </div>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden p-1 rounded hover:bg-zinc-800">
@@ -181,44 +323,133 @@ export default function Home() {
           </button>
         </div>
 
-        {/* 연동 데이터 정보 */}
-        <div className="mt-6 flex-1 space-y-6 overflow-y-auto pr-1">
+        {/* 연동 데이터 정보 & 실시간 업로드 컴포넌트 */}
+        <div className="mt-5 flex-1 space-y-5 overflow-y-auto pr-1">
+          {/* 매뉴얼 적재 리스트 (동적 연동) */}
           <div>
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3">연동 및 적재된 매뉴얼 (RAG)</h3>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-3">
-              <div className="flex items-start gap-2.5">
-                <span className="text-xl">📄</span>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-zinc-200 truncate">UnHarenesedYU_이진녕_7614_A안.pdf</p>
-                  <p className="text-[10px] text-zinc-400 mt-0.5">총 7개 페이지 완벽 파싱 및 임베딩 완료</p>
+            <div className="flex justify-between items-center mb-2.5">
+              <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">연동 및 적재 매뉴얼 ({manualFiles.length})</h3>
+              <button 
+                onClick={handleForceRebuild}
+                disabled={actionLoading}
+                className="text-[9px] font-bold text-zinc-400 bg-zinc-850 hover:bg-zinc-800 hover:text-indigo-400 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
+                title="데이터베이스 전체 재임베딩 강제 실행"
+              >
+                🔄 전체 갱신
+              </button>
+            </div>
+            
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
+              {manualFiles.length === 0 ? (
+                <div className="text-center py-4">
+                  <p className="text-[10px] text-zinc-500 font-medium">연동된 매뉴얼 파일이 없습니다.</p>
+                  <p className="text-[9px] text-zinc-600 mt-0.5">아래 드롭존에서 PDF를 업로드하세요.</p>
                 </div>
-              </div>
-              <div className="h-px bg-zinc-800"></div>
-              <div className="flex justify-between items-center text-[10px] font-semibold text-zinc-400">
-                <span>데이터 컬렉션</span>
-                <span className="bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded text-indigo-400">equipment_manuals</span>
-              </div>
+              ) : (
+                manualFiles.map((file) => (
+                  <div key={file.id} className="flex justify-between items-start gap-2 bg-zinc-900/40 p-2 rounded-lg border border-zinc-900/80 hover:border-zinc-850 transition-colors group">
+                    <div className="flex gap-2 min-w-0">
+                      <span className="text-sm shrink-0">📄</span>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold text-zinc-200 truncate" title={file.fileName}>
+                          {file.fileName}
+                        </p>
+                        <p className="text-[9px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
+                          <span>{formatBytes(file.fileSize)}</span>
+                          <span>•</span>
+                          <span className={file.status === "success" ? "text-emerald-400 font-bold" : file.status === "pending" ? "text-amber-400 animate-pulse" : "text-rose-400"}>
+                            {file.status === "success" ? "적재완료" : file.status === "pending" ? "임베딩중" : "실패"}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <button 
+                      onClick={() => handleFileDelete(file.id, file.fileName)}
+                      disabled={actionLoading}
+                      className="text-zinc-500 hover:text-rose-400 p-1 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
+                      title="ChromaDB 및 디스크에서 즉시 영구 삭제"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
+          {/* Premium Glassmorphic Upload Dropzone */}
           <div>
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3">시스템 정보</h3>
-            <div className="space-y-2">
-              <div className="flex justify-between items-center bg-zinc-950/50 px-3.5 py-2.5 rounded-xl border border-zinc-900 text-xs">
-                <span className="text-zinc-400 font-medium">LLM 엔진</span>
-                <span className="text-zinc-200 font-bold">Gemini 2.5 Flash</span>
+            <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2.5">신규 매뉴얼 파일 추가</h3>
+            <div className="relative border border-dashed border-zinc-800 rounded-xl bg-zinc-950/40 p-4 transition-all hover:bg-zinc-950/60 hover:border-indigo-500/50 flex flex-col items-center justify-center text-center">
+              <input 
+                type="file" 
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                disabled={actionLoading}
+                accept=".pdf,image/*"
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-not-allowed"
+              />
+              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mb-2 shrink-0">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
               </div>
-              <div className="flex justify-between items-center bg-zinc-950/50 px-3.5 py-2.5 rounded-xl border border-zinc-900 text-xs">
-                <span className="text-zinc-400 font-medium">Embedding 모델</span>
-                <span className="text-zinc-200 font-bold text-[10px] text-indigo-300">gemini-embedding-2</span>
+              <p className="text-[11px] font-bold text-zinc-300">이곳에 PDF 마우스 드래그 또는 클릭</p>
+              <p className="text-[9px] text-zinc-500 mt-1">파일 업로드 즉시 백그라운드에서 임베딩 적재가 시작됩니다.</p>
+            </div>
+          </div>
+
+          {/* 실시간 프로그레스 피드백 */}
+          {actionStage !== "idle" && (
+            <div className={`border rounded-xl p-3 text-xs ${
+              actionStage === "success" 
+                ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-300"
+                : actionStage === "error"
+                ? "bg-rose-950/20 border-rose-500/30 text-rose-300"
+                : "bg-indigo-950/10 border-indigo-500/30 text-zinc-200"
+            }`}>
+              <div className="flex items-center gap-2">
+                {(actionStage === "uploading" || actionStage === "ingesting") && (
+                  <svg className="w-3.5 h-3.5 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                )}
+                {actionStage === "success" && <span className="text-emerald-400 text-sm">✓</span>}
+                {actionStage === "error" && <span className="text-rose-400 text-sm">⚠</span>}
+                <span className="font-bold text-[10px] uppercase tracking-wider">
+                  {actionStage === "uploading" && "1단계: 업로드"}
+                  {actionStage === "ingesting" && "2단계: DB 적재중"}
+                  {actionStage === "success" && "완료"}
+                  {actionStage === "error" && "오류 발생"}
+                </span>
               </div>
-              <div className="flex justify-between items-center bg-zinc-950/50 px-3.5 py-2.5 rounded-xl border border-zinc-900 text-xs">
-                <span className="text-zinc-400 font-medium">Vector DB</span>
-                <span className="text-zinc-200 font-bold">ChromaDB Local</span>
+              <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">{actionMessage}</p>
+            </div>
+          )}
+
+          {/* 시스템 정보 */}
+          <div>
+            <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2.5">시스템 정보</h3>
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
+                <span className="text-zinc-500 font-medium">LLM 엔진</span>
+                <span className="text-zinc-300 font-bold">Gemini 2.5 Flash</span>
               </div>
-              <div className="flex justify-between items-center bg-zinc-950/50 px-3.5 py-2.5 rounded-xl border border-zinc-900 text-xs">
-                <span className="text-zinc-400 font-medium">가드레일 상태</span>
-                <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
+                <span className="text-zinc-500 font-medium">Embedding 모델</span>
+                <span className="text-indigo-400 font-bold text-[10px]">gemini-embedding-2</span>
+              </div>
+              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
+                <span className="text-zinc-500 font-medium">Vector DB</span>
+                <span className="text-zinc-300 font-bold">ChromaDB Local</span>
+              </div>
+              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
+                <span className="text-zinc-500 font-medium">가드레일 모드</span>
+                <span className="flex items-center gap-1.5 text-emerald-400 font-extrabold text-[10px]">
                   <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></span>
                   Active (엄격)
                 </span>
@@ -228,7 +459,7 @@ export default function Home() {
         </div>
 
         {/* 풋터 영역 */}
-        <div className="pt-4 border-t border-zinc-800 text-[10px] text-zinc-500 text-center font-medium">
+        <div className="pt-3 border-t border-zinc-800 text-[9px] text-zinc-500 text-center font-medium">
           <p>© 2026 UnHarnesedYU. All Rights Reserved.</p>
           <p className="mt-0.5">설비 다운타임 최소화 워크플로우 엔진</p>
         </div>
@@ -253,8 +484,13 @@ export default function Home() {
               </svg>
             </button>
             <div>
-              <h1 className="text-sm sm:text-base font-bold text-white">RAG 장애 조치 지원 에이전트</h1>
-              <p className="text-[10px] sm:text-xs text-zinc-400">오직 사내 매뉴얼에 명시된 엄격한 조치 절차만을 안내합니다.</p>
+              <h1 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                RAG 장애 조치 지원 에이전트
+                <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20 font-extrabold uppercase tracking-wide">
+                  Quota Optimized
+                </span>
+              </h1>
+              <p className="text-[10px] sm:text-xs text-zinc-400">오직 사내 매뉴얼(data/)에 명시된 엄격한 조치 절차만을 안내합니다.</p>
             </div>
           </div>
 
@@ -335,9 +571,9 @@ export default function Home() {
                           : "bg-zinc-900 border-zinc-800 text-zinc-200 rounded-tl-none"
                       }`}
                     >
-                      {/* 상태 뱃지 (AI 응답인 경우만) */}
+                      {/* 상태 뱃지 및 캐시 뱃지 (AI 응답인 경우만) */}
                       {!isUser && responseData && (
-                        <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-800/50">
+                        <div className="flex items-center justify-between gap-4 pb-3 mb-3 border-b border-zinc-800/50">
                           <span
                             className={`flex items-center gap-1.5 text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${
                               responseData.status === "success"
@@ -352,6 +588,13 @@ export default function Home() {
                             ></span>
                             {responseData.status === "success" ? "절차 매칭 성공" : "Fail-safe 안전 제어 작동"}
                           </span>
+
+                          {/* ⚡ 의미 QA 캐시 히트 성공시 표시되는 고휘도 테두리 뱃지 */}
+                          {responseData.isCached && (
+                            <span className="flex items-center gap-1 text-[10px] font-black text-amber-300 bg-amber-500/15 border border-amber-400/30 px-2 py-0.5 rounded-full shadow-[0_0_12px_rgba(245,158,11,0.2)] animate-bounce shrink-0 select-none">
+                              ⚡ QA 캐시 적용됨
+                            </span>
+                          )}
                         </div>
                       )}
 
