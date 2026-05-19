@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import * as _pdf from "pdf-parse";
 // @ts-ignore
 const { PDFParse } = _pdf;
-import { getEmbedding, analyzeDocumentStructure, performOCR } from "../lib/gemini";
+import { getEmbedding, analyzeDocumentStructure, performOCR, performScanPdfOCR } from "../lib/gemini";
 import { addDocumentsToVectorDB, clearManualCollection, deleteDocumentsFromVectorDB } from "../lib/chroma";
 import { addManual, updateManualStatus } from "../lib/db";
 
@@ -105,8 +105,22 @@ export async function runIngestion(options = { clearDB: true }) {
 
       // 2. PDF 페이지별 파싱
       console.log(`2. PDF 페이지 파싱 시작: ${pdfFile}`);
-      const rawPages = await parsePdfByPages(pdfPath);
+      let rawPages = await parsePdfByPages(pdfPath);
       console.log(`파싱 완료. 총 ${rawPages.length}페이지 검출됨.`);
+
+      // 스캔본 PDF 여부 검사 (모든 페이지의 텍스트가 비어 있는지 확인)
+      const hasText = rawPages.some(page => page && page.trim().length > 0);
+      if (!hasText) {
+        console.log(`[경고] '${pdfFile}' 파일에 텍스트 데이터가 전혀 없습니다. (스캔된 이미지 PDF로 식별됨)`);
+        console.log(`[대응] Gemini Vision PDF OCR 파이프라인을 작동하여 강제 텍스트 추출을 수행합니다...`);
+        try {
+          const pdfBuffer = fs.readFileSync(pdfPath);
+          rawPages = await performScanPdfOCR(pdfBuffer);
+          console.log(`[Gemini OCR 성공] 스캔 이미지로부터 총 ${rawPages.length}개의 정형화된 페이지 텍스트를 복원했습니다.`);
+        } catch (ocrErr: any) {
+          console.error(`[오류] Gemini PDF OCR 수행 도중 실패했습니다. 에러: ${ocrErr.message || ocrErr}`);
+        }
+      }
 
       let activePageCount = 0;
 

@@ -135,3 +135,66 @@ export async function generateResponse(prompt: string, systemInstruction?: strin
     throw error;
   }
 }
+
+/**
+ * 스캔본 PDF를 통째로 Gemini 2.5 Flash API에 전달하여, 
+ * 각 페이지의 텍스트를 정확하게 판독(OCR)해 달라고 요청합니다.
+ * @param pdfBuffer PDF 파일 바이너리 버퍼
+ * @returns 페이지별 텍스트의 배열
+ */
+export async function performScanPdfOCR(pdfBuffer: Buffer): Promise<string[]> {
+  const genAI = getGeminiClient();
+  try {
+    const model = genAI.getGenerativeModel({ model: GENERATIVE_MODEL_NAME });
+
+    // PDF 바이너리를 inlineData 형태로 구성
+    const pdfPart = {
+      inlineData: {
+        data: pdfBuffer.toString("base64"),
+        mimeType: "application/pdf"
+      }
+    };
+
+    const prompt = `
+이 파일은 텍스트 정보가 들어 있지 않거나 스캔된 이미지로 구성된 설비 유지보수 매뉴얼 PDF입니다.
+이 PDF 문서의 모든 페이지를 꼼꼼하게 읽고 분석하여, 각 페이지의 글자를 추출(OCR)해 주세요.
+
+[요구사항]
+1. 각 페이지별로 구분을 명확히 하기 위해 반드시 다음 형태로만 출력해야 합니다:
+--- PAGE_START: X ---
+[해당 페이지에서 추출 및 정리한 정형화된 마크다운 텍스트]
+--- PAGE_END: X ---
+
+2. X는 실제 페이지 번호(1부터 시작)로 기재해 주세요.
+3. 이미지 내의 표(Table)나 수치, 경고(WARNING) 사항은 마크다운 문법을 활용해 의미를 보존하며 예쁘게 정리하세요.
+4. 어떤 부연 설명이나 서론도 생략하고, 오직 상기 페이지 구분 규격에 따른 마크다운 결과물만 연속해서 출력하세요.
+`;
+
+    console.log("[Gemini Vision PDF OCR] 대용량 스캔 PDF에 대한 Gemini API Direct OCR 분석을 구동합니다...");
+    const result = await model.generateContent([prompt, pdfPart]);
+    const response = await result.response;
+    const textResult = response.text().trim();
+
+    // 결과를 파싱하여 페이지별 텍스트 배열 생성
+    const pages: string[] = [];
+    const regex = /--- PAGE_START:\s*(\d+)\s*---([\s\S]*?)--- PAGE_END:\s*\1\s*---/g;
+    let match;
+    while ((match = regex.exec(textResult)) !== null) {
+      const pageNum = parseInt(match[1]);
+      const pageText = match[2].trim();
+      pages.push(pageText);
+    }
+
+    // 만약 정규식 매칭이 한 건도 안 되거나 유실된 경우를 대비한 폴백 처리
+    if (pages.length === 0) {
+      console.warn("[Gemini Vision PDF OCR] 페이지 파싱 규격 매칭 실패. 통째로 단일 페이지로 적재합니다.");
+      return [textResult];
+    }
+
+    return pages;
+  } catch (error) {
+    console.error("Gemini Scan PDF OCR 수행 실패:", error);
+    throw error;
+  }
+}
+
