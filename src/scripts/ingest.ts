@@ -102,8 +102,13 @@ async function runIngestion() {
 
         console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
         
-        // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존)
-        const structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
+        let structuredText = rawText;
+        try {
+          // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존) 시도
+          structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
+        } catch (llmError) {
+          console.warn(`[경고] Gemini LLM 구조 정제 실패 (할당량 초과 또는 API 오류). 원시 텍스트를 그대로 사용합니다. 에러: ${(llmError as any).message || llmError}`);
+        }
 
         console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
         // Gemini Embedding API 호출
@@ -134,32 +139,36 @@ async function runIngestion() {
     for (const file of filesInDocs) {
       const ext = path.extname(file).toLowerCase();
       if (imageExtensions.includes(ext)) {
-        const imagePath = path.join(docsDir, file);
-        console.log(`\n[비정형 이미지 발견] 이미지 OCR 처리 중: ${file}`);
-        
-        const imageBuffer = fs.readFileSync(imagePath);
-        
-        let mimeType = "image/png";
-        if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+        try {
+          const imagePath = path.join(docsDir, file);
+          console.log(`\n[비정형 이미지 발견] 이미지 OCR 처리 중: ${file}`);
+          
+          const imageBuffer = fs.readFileSync(imagePath);
+          
+          let mimeType = "image/png";
+          if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
 
-        // Gemini Vision을 통한 OCR 텍스트 추출 및 정형화
-        const ocrText = await retryWithDelay(() => performOCR(imageBuffer, mimeType));
-        console.log(`OCR 텍스트 추출 완료! 내용 길이: ${ocrText.length}`);
+          // Gemini Vision을 통한 OCR 텍스트 추출 및 정형화
+          const ocrText = await retryWithDelay(() => performOCR(imageBuffer, mimeType));
+          console.log(`OCR 텍스트 추출 완료! 내용 길이: ${ocrText.length}`);
 
-        console.log(`[${file}] 텍스트 임베딩 생성 중...`);
-        const vector = await retryWithDelay(() => getEmbedding(ocrText));
+          console.log(`[${file}] 텍스트 임베딩 생성 중...`);
+          const vector = await retryWithDelay(() => getEmbedding(ocrText));
 
-        const safeImageName = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
-        documentsToIngest.push({
-          id: `image_ocr_${safeImageName}`,
-          vector,
-          text: ocrText,
-          metadata: {
-            source: file,
-            page: virtualPageNum++,
-            type: "image_ocr"
-          }
-        });
+          const safeImageName = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
+          documentsToIngest.push({
+            id: `image_ocr_${safeImageName}`,
+            vector,
+            text: ocrText,
+            metadata: {
+              source: file,
+              page: virtualPageNum++,
+              type: "image_ocr"
+            }
+          });
+        } catch (imageError) {
+          console.error(`[오류] 이미지 ${file} OCR 처리 실패. 이 이미지는 건너뜁니다. 에러: ${(imageError as any).message || imageError}`);
+        }
 
         // API Rate Limit 방지를 위한 짧은 딜레이
         await new Promise((resolve) => setTimeout(resolve, 1500));
