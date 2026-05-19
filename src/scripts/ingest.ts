@@ -6,6 +6,7 @@ import * as _pdf from "pdf-parse";
 const { PDFParse } = _pdf;
 import { getEmbedding, analyzeDocumentStructure, performOCR } from "../lib/gemini";
 import { addDocumentsToVectorDB, clearManualCollection } from "../lib/chroma";
+import { addManual, updateManualStatus } from "../lib/db";
 
 // .env.local 환경 변수 명시적 로드
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
@@ -43,53 +44,68 @@ async function retryWithDelay<T>(fn: () => Promise<T>, retries = 3, delayMs = 30
 }
 
 /**
- * 인제스천 메인 실행 함수
+ * 인제스천 메인 실행 함수 (웹/서버액션에서 임포트 가능하도록 export)
+ * @param options clearDB: true이면 ChromaDB를 초기화하고 data/ 폴더 전체를 새로 적재합니다.
  */
-async function runIngestion() {
+export async function runIngestion(options = { clearDB: true }) {
   console.log("=== [3단계] 데이터 적재 파이프라인 (Data Ingestion) 시작 ===");
 
   const geminiKey = process.env.GEMINI_API_KEY;
   if (!geminiKey || geminiKey.includes("YOUR_GEMINI_API_KEY")) {
     console.error("오류: 유효한 GEMINI_API_KEY가 .env.local에 설정되어 있지 않습니다.");
     console.error("인제스천 작업을 중단합니다.");
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw new Error("유효한 GEMINI_API_KEY가 설정되어 있지 않습니다.");
   }
 
-  const docsDir = path.resolve(process.cwd(), "docs");
+  // 대상 디렉터리를 docs/에서 data/로 완벽 단일화 이전
+  const dataDir = path.resolve(process.cwd(), "data");
   
-  if (!fs.existsSync(docsDir)) {
-    console.error(`오류: docs 디렉토리를 찾을 수 없습니다. 경로: ${docsDir}`);
-    process.exit(1);
+  // data 폴더 자동 생성 처리
+  if (!fs.existsSync(dataDir)) {
+    console.log("data 디렉토리가 존재하지 않아 새로 생성합니다.");
+    fs.mkdirSync(dataDir, { recursive: true });
   }
 
-  // docs 폴더 내의 모든 PDF 파일 검색
-  const filesInDocs = fs.readdirSync(docsDir);
+  // data 폴더 내의 모든 PDF 파일 검색
+  const filesInDocs = fs.readdirSync(dataDir);
   const pdfFiles = filesInDocs.filter(file => path.extname(file).toLowerCase() === ".pdf");
 
-  if (pdfFiles.length === 0) {
-    console.error("오류: docs 디렉토리에 PDF 파일이 존재하지 않습니다.");
-    process.exit(1);
-  }
-
-  console.log(`발견된 PDF 파일 목록: ${pdfFiles.join(", ")}`);
+  console.log(`발견된 RAG PDF 파일 목록: ${pdfFiles.join(", ")}`);
 
   try {
-    // 1. 기존 ChromaDB 컬렉션 비우기 (중복 적재 방지 및 테스트 초기화)
-    console.log("1. 기존 벡터 컬렉션 초기화 중...");
-    await clearManualCollection();
+    // 1. 기존 ChromaDB 컬렉션 비우기 (옵션에 따름)
+    if (options.clearDB) {
+      console.log("1. 기존 벡터 컬렉션 초기화 중...");
+      try {
+        await clearManualCollection();
+      } catch (err) {
+        console.log("기존 컬렉션이 없거나 삭제에 실패하여 건너뜁니다.");
+      }
+    }
 
-    let skipLLMStructure = false;
+    // [중요: 토큰 절약 최적화]
+    // 갱신 시 발생하는 Gemini API 2.5 LLM 모델 쿼터 소모를 0으로 낮추기 위해
+    // 디폴트값으로 skipLLMStructure를 true로 고정합니다. (원시 텍스트와 임베딩만으로 신속 안전 적재)
+    let skipLLMStructure = true;
     const documentsToIngest = [];
 
     // 각 PDF 파일 순회하며 처리
     for (const pdfFile of pdfFiles) {
-      const pdfPath = path.join(docsDir, pdfFile);
+      const pdfPath = path.join(dataDir, pdfFile);
       console.log(`\n--- PDF 파일 처리 시작: ${pdfFile} ---`);
       
+      const stats = fs.statSync(pdfPath);
+      // DB 상태 기록용 데이터 등록 (pending)
+      const safeId = pdfFile.replace(/[^a-zA-Z0-9가-힣]/g, "_");
+      addManual(pdfFile, stats.size);
+
       // 2. PDF 페이지별 파싱
       console.log(`2. PDF 페이지 파싱 시작: ${pdfFile}`);
       const rawPages = await parsePdfByPages(pdfPath);
       console.log(`파싱 완료. 총 ${rawPages.length}페이지 검출됨.`);
+
+      let activePageCount = 0;
 
       // 3. 페이지별 데이터 정제 및 적재 준비
       for (let i = 0; i < rawPages.length; i++) {
@@ -101,7 +117,9 @@ async function runIngestion() {
           continue;
         }
 
+        activePageCount++;
         let structuredText = rawText;
+
         if (!skipLLMStructure) {
           console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
           try {
@@ -112,7 +130,7 @@ async function runIngestion() {
             skipLLMStructure = true;
           }
         } else {
-          console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 정제 건너뜀 (플래그 활성화)`);
+          console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 정제 건너뜀 (토큰 세이버 활성화)`);
         }
 
         console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
@@ -120,9 +138,8 @@ async function runIngestion() {
         const vector = await retryWithDelay(() => getEmbedding(structuredText));
 
         // 고유 ID 생성 (파일명과 페이지 번호 결합)
-        const safeFileName = pdfFile.replace(/[^a-zA-Z0-9가-힣]/g, "_");
         documentsToIngest.push({
-          id: `pdf_${safeFileName}_page_${pageNum}`,
+          id: `pdf_${safeId}_page_${pageNum}`,
           vector,
           text: structuredText,
           metadata: {
@@ -133,7 +150,14 @@ async function runIngestion() {
         });
 
         // API Rate Limit 방지를 위한 짧은 딜레이
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      // 인제스천이 완료된 파일 상태를 DB에 성공(success)으로 업데이트
+      if (activePageCount > 0) {
+        updateManualStatus(safeId, "success");
+      } else {
+        updateManualStatus(safeId, "failed");
       }
     }
 
@@ -144,10 +168,12 @@ async function runIngestion() {
     for (const file of filesInDocs) {
       const ext = path.extname(file).toLowerCase();
       if (imageExtensions.includes(ext)) {
+        const safeImageId = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
         try {
-          const imagePath = path.join(docsDir, file);
+          const imagePath = path.join(dataDir, file);
           console.log(`\n[비정형 이미지 발견] 이미지 OCR 처리 중: ${file}`);
           
+          addManual(file, fs.statSync(imagePath).size);
           const imageBuffer = fs.readFileSync(imagePath);
           
           let mimeType = "image/png";
@@ -160,9 +186,8 @@ async function runIngestion() {
           console.log(`[${file}] 텍스트 임베딩 생성 중...`);
           const vector = await retryWithDelay(() => getEmbedding(ocrText));
 
-          const safeImageName = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
           documentsToIngest.push({
-            id: `image_ocr_${safeImageName}`,
+            id: `image_ocr_${safeImageId}`,
             vector,
             text: ocrText,
             metadata: {
@@ -171,12 +196,15 @@ async function runIngestion() {
               type: "image_ocr"
             }
           });
+
+          updateManualStatus(safeImageId, "success");
         } catch (imageError) {
           console.error(`[오류] 이미지 ${file} OCR 처리 실패. 이 이미지는 건너뜁니다. 에러: ${(imageError as any).message || imageError}`);
+          updateManualStatus(safeImageId, "failed");
         }
 
         // API Rate Limit 방지를 위한 짧은 딜레이
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
@@ -185,14 +213,24 @@ async function runIngestion() {
       console.log(`\n3. 총 ${documentsToIngest.length}개의 데이터를 ChromaDB에 적재합니다...`);
       await addDocumentsToVectorDB(documentsToIngest);
       console.log("=== [3단계] 데이터 적재 파이프라인 성공적으로 완료! ===");
+      return { success: true, count: documentsToIngest.length, message: "성공적으로 RAG 임베딩이 적재되었습니다." };
     } else {
       console.warn("적재할 문서 데이터가 없습니다.");
+      return { success: false, count: 0, message: "적재할 문서가 존재하지 않습니다." };
     }
   } catch (error) {
     console.error("데이터 적재 파이프라인 수행 중 오류 발생:", error);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw error;
   }
 }
 
-// 스크립트 실행
-runIngestion();
+// Node CLI 환경에서 직접 실행 시 동작 처리
+const currentFilePath = typeof __filename !== 'undefined' ? __filename : '';
+const isDirectRun = require.main === module || (process.argv[1] && process.argv[1].endsWith("ingest.ts"));
+
+if (isDirectRun) {
+  runIngestion()
+    .then(() => console.log("CLI 인제스천 완료"))
+    .catch((err) => console.error("CLI 인제스천 실패:", err));
+}
