@@ -4,15 +4,15 @@
       "id": "소방엔진펌프통합설명서_V24_12_코리아모터펌프_주__pdf",
       "fileName": "소방엔진펌프통합설명서 V24-12_코리아모터펌프(주).pdf",
       "fileSize": 37521075,
-      "uploadedAt": "2026-05-19T08:35:17.516Z",
-      "status": "pending"
+      "uploadedAt": "2026-05-19T08:38:58.030Z",
+      "status": "failed"
     },
     {
       "id": "simens_pdf",
       "fileName": "simens.pdf",
       "fileSize": 10082246,
-      "uploadedAt": "2026-05-19T08:29:01.082Z",
-      "status": "success"
+      "uploadedAt": "2026-05-19T08:41:23.093Z",
+      "status": "pending"
     }
   ],
   "qa_cache": [
@@ -15499,5 +15499,6 @@
       "status": "success",
       "createdAt": "2026-05-19T08:13:03.698Z"
     }
-  ]
+  ],
+  "sessions": []
 }

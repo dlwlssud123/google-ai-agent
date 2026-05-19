@@ -19,23 +19,53 @@ export const EMBEDDING_MODEL_NAME = "gemini-embedding-2";
 export const GENERATIVE_MODEL_NAME = "gemini-2.5-flash"; // 최신 고성능 멀티모달 모델
 
 /**
+ * 에러 발생 시 지수 백오프(Exponential Backoff)를 바탕으로 재시도를 수행하는 공통 헬퍼 함수입니다.
+ * 특히 503(Service Unavailable) 및 429(Rate Limit Exceeded) 에러 대응에 효과적입니다.
+ */
+async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 4, initialDelay = 1500): Promise<T> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      const errorMessage = error?.message || String(error);
+      const isTemporaryError = 
+        errorMessage.includes("503") || 
+        errorMessage.includes("Service Unavailable") ||
+        errorMessage.includes("429") || 
+        errorMessage.includes("Resource has been exhausted") ||
+        errorMessage.includes("high demand") ||
+        errorMessage.includes("busy") ||
+        errorMessage.includes("fetch failed");
+
+      if (isTemporaryError && attempt < maxRetries) {
+        const delay = initialDelay * Math.pow(2, attempt - 1) + Math.random() * 200;
+        console.warn(`[Gemini API] 일시적 오류 또는 과부하 감지 (${errorMessage.trim()}). ${Math.round(delay)}ms 후 재시도합니다... (시도 ${attempt}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error("최대 재시도 횟수를 초과했습니다.");
+}
+
+/**
  * 주어진 텍스트의 임베딩 벡터를 반환합니다.
  * @param text 임베딩할 문자열
  * @returns 768차원 또는 1536차원의 실수 배열 (임베딩 벡터)
  */
 export async function getEmbedding(text: string): Promise<number[]> {
-  const genAI = getGeminiClient();
-  try {
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
     const embedModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL_NAME });
     const result = await embedModel.embedContent(text);
     if (!result.embedding || !result.embedding.values) {
       throw new Error("임베딩 반환 값에 데이터가 없습니다.");
     }
     return result.embedding.values;
-  } catch (error) {
-    console.error("Gemini Embedding API 호출 실패:", error);
-    throw error;
-  }
+  });
 }
 
 /**
@@ -44,8 +74,8 @@ export async function getEmbedding(text: string): Promise<number[]> {
  * @returns 구조화된 Markdown 형식의 텍스트
  */
 export async function analyzeDocumentStructure(text: string): Promise<string> {
-  const genAI = getGeminiClient();
-  try {
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
     const model = genAI.getGenerativeModel({ 
       model: GENERATIVE_MODEL_NAME,
       generationConfig: { responseMimeType: "text/plain" }
@@ -69,10 +99,7 @@ ${text}
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text().trim();
-  } catch (error) {
-    console.error("Gemini 문서 구조 해석 실패:", error);
-    throw error;
-  }
+  });
 }
 
 /**
@@ -82,11 +109,10 @@ ${text}
  * @returns 추출된 구조화된 마크다운 텍스트
  */
 export async function performOCR(imageBuffer: Buffer, mimeType: string): Promise<string> {
-  const genAI = getGeminiClient();
-  try {
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
     const model = genAI.getGenerativeModel({ model: GENERATIVE_MODEL_NAME });
 
-    // 이미지를 Gemini API 규격에 맞는 Part 객체로 변환
     const imagePart = {
       inlineData: {
         data: imageBuffer.toString("base64"),
@@ -108,10 +134,7 @@ export async function performOCR(imageBuffer: Buffer, mimeType: string): Promise
     const result = await model.generateContent([prompt, imagePart]);
     const response = await result.response;
     return response.text().trim();
-  } catch (error) {
-    console.error("Gemini Vision OCR 수행 실패:", error);
-    throw error;
-  }
+  });
 }
 
 /**
@@ -120,8 +143,8 @@ export async function performOCR(imageBuffer: Buffer, mimeType: string): Promise
  * @param systemInstruction 시스템 지침 (가드레일 역할)
  */
 export async function generateResponse(prompt: string, systemInstruction?: string): Promise<string> {
-  const genAI = getGeminiClient();
-  try {
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
     const model = genAI.getGenerativeModel({ 
       model: GENERATIVE_MODEL_NAME,
       systemInstruction: systemInstruction
@@ -130,10 +153,7 @@ export async function generateResponse(prompt: string, systemInstruction?: strin
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text().trim();
-  } catch (error) {
-    console.error("Gemini 텍스트 생성 실패:", error);
-    throw error;
-  }
+  });
 }
 
 /**
@@ -143,11 +163,10 @@ export async function generateResponse(prompt: string, systemInstruction?: strin
  * @returns 페이지별 텍스트의 배열
  */
 export async function performScanPdfOCR(pdfBuffer: Buffer): Promise<string[]> {
-  const genAI = getGeminiClient();
-  try {
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
     const model = genAI.getGenerativeModel({ model: GENERATIVE_MODEL_NAME });
 
-    // PDF 바이너리를 inlineData 형태로 구성
     const pdfPart = {
       inlineData: {
         data: pdfBuffer.toString("base64"),
@@ -175,7 +194,6 @@ export async function performScanPdfOCR(pdfBuffer: Buffer): Promise<string[]> {
     const response = await result.response;
     const textResult = response.text().trim();
 
-    // 결과를 파싱하여 페이지별 텍스트 배열 생성
     const pages: string[] = [];
     const regex = /--- PAGE_START:\s*(\d+)\s*---([\s\S]*?)--- PAGE_END:\s*\1\s*---/g;
     let match;
@@ -185,16 +203,12 @@ export async function performScanPdfOCR(pdfBuffer: Buffer): Promise<string[]> {
       pages.push(pageText);
     }
 
-    // 만약 정규식 매칭이 한 건도 안 되거나 유실된 경우를 대비한 폴백 처리
     if (pages.length === 0) {
       console.warn("[Gemini Vision PDF OCR] 페이지 파싱 규격 매칭 실패. 통째로 단일 페이지로 적재합니다.");
       return [textResult];
     }
 
     return pages;
-  } catch (error) {
-    console.error("Gemini Scan PDF OCR 수행 실패:", error);
-    throw error;
-  }
+  });
 }
 
