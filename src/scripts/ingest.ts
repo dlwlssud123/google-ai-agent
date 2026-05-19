@@ -108,18 +108,36 @@ export async function runIngestion(options = { clearDB: true }) {
       let rawPages = await parsePdfByPages(pdfPath);
       console.log(`파싱 완료. 총 ${rawPages.length}페이지 검출됨.`);
 
-      // 스캔본 PDF 여부 검사 (모든 페이지의 텍스트가 비어 있는지 확인)
-      const hasText = rawPages.some(page => page && page.trim().length > 0);
-      if (!hasText) {
-        console.log(`[경고] '${pdfFile}' 파일에 텍스트 데이터가 전혀 없습니다. (스캔된 이미지 PDF로 식별됨)`);
-        console.log(`[대응] Gemini Vision PDF OCR 파이프라인을 작동하여 강제 텍스트 추출을 수행합니다...`);
+      // 스캔본 혹은 하이브리드(일부 스캔본) PDF 여부 검사 (텍스트가 비어 있거나 매우 적은 페이지가 존재하는지 확인)
+      let ocrPages: string[] = [];
+      const hasEmptyPages = rawPages.some(page => !page || page.trim().length < 20);
+      if (hasEmptyPages) {
+        console.log(`[경고] '${pdfFile}' 파일의 일부 페이지에 텍스트가 없거나 매우 적습니다. (${rawPages.filter(p => !p || p.trim().length < 20).length}개 페이지)`);
+        console.log(`[대응] Gemini Vision PDF OCR 파이프라인을 작동하여 텍스트 복원을 수행합니다...`);
         try {
           const pdfBuffer = fs.readFileSync(pdfPath);
-          rawPages = await performScanPdfOCR(pdfBuffer);
-          console.log(`[Gemini OCR 성공] 스캔 이미지로부터 총 ${rawPages.length}개의 정형화된 페이지 텍스트를 복원했습니다.`);
+          ocrPages = await performScanPdfOCR(pdfBuffer);
+          console.log(`[Gemini OCR 성공] 스캔 이미지로부터 총 ${ocrPages.length}개의 페이지 텍스트를 복원했습니다.`);
         } catch (ocrErr: any) {
           console.error(`[오류] Gemini PDF OCR 수행 도중 실패했습니다. 에러: ${ocrErr.message || ocrErr}`);
         }
+      }
+
+      // 페이지 병합 (rawText가 충분히 길면 그대로 쓰고, 비어있거나 짧으면 OCR 텍스트로 보완)
+      for (let i = 0; i < rawPages.length; i++) {
+        let text = rawPages[i]?.trim() || "";
+        if (text.length < 20) {
+          if (ocrPages.length === rawPages.length && ocrPages[i]) {
+            text = ocrPages[i].trim();
+            console.log(`[보완] 페이지 ${i + 1}의 텍스트가 부족하여 OCR 텍스트로 대체했습니다.`);
+          } else if (ocrPages.length > 0) {
+            if (ocrPages[i]) {
+              text = ocrPages[i].trim();
+              console.log(`[보완 - 개수 불일치] 페이지 ${i + 1}의 텍스트를 ocrPages[${i}]로 대체했습니다.`);
+            }
+          }
+        }
+        rawPages[i] = text;
       }
 
       let activePageCount = 0;

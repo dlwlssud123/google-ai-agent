@@ -85,8 +85,8 @@ export async function askAgent(query: string, history: ChatMessage[] = []): Prom
       };
     }
 
-    // 2. ChromaDB에서 상위 3개 유사 매뉴얼 단락 검색
-    const searchResults = await querySimilarityFromVectorDB(queryVector, 3);
+    // 2. ChromaDB에서 상위 8개 유사 매뉴얼 단락 검색
+    const searchResults = await querySimilarityFromVectorDB(queryVector, 8);
 
     // [2단계: 토큰 세이버 - 로컬 유사도 컷오프 가드레일]
     // ChromaDB 코사인 거리가 0.82 이상(유사도가 매우 희박함)이거나 검색 데이터가 없다면
