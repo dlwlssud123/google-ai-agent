@@ -3,6 +3,7 @@
 import { getEmbedding, getGeminiClient, GENERATIVE_MODEL_NAME } from "../../lib/gemini";
 import { querySimilarityFromVectorDB } from "../../lib/chroma";
 import { SYSTEM_INSTRUCTION } from "../../lib/prompt";
+import { getCachedResponse, saveQACache } from "../../lib/db";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -14,6 +15,7 @@ export interface ChatResponse {
   answer: string;
   citations: { source: string; page: number }[];
   nextSteps: string[];
+  isCached?: boolean; // 캐시 적용 여부 플래그
 }
 
 /**
@@ -66,11 +68,45 @@ export async function askAgent(query: string, history: ChatMessage[] = []): Prom
   }
 
   try {
-    // 1. 사용자 쿼리 임베딩 벡터 생성
+    // 1. 사용자 쿼리 임베딩 벡터 생성 (Embedding API는 일일 호출 한도가 매우 넉넉하여 안전함)
     const queryVector = await getEmbedding(query);
+
+    // [1단계: 토큰 세이버 - 의미 QA 캐싱 확인]
+    // 95% 이상 의미적으로 유사한 과거 질문이 데이터베이스에 등록되어 있다면 LLM 호출 생략
+    const cacheHit = getCachedResponse(queryVector, 0.95);
+    if (cacheHit) {
+      console.log(`[⚡ Semantic QA Cache Hit] 질문: "${query}" -> 캐시 히트 성공!`);
+      return {
+        status: cacheHit.status as "success" | "fail-safe",
+        answer: cacheHit.answer,
+        citations: cacheHit.citations,
+        nextSteps: cacheHit.nextSteps,
+        isCached: true
+      };
+    }
 
     // 2. ChromaDB에서 상위 3개 유사 매뉴얼 단락 검색
     const searchResults = await querySimilarityFromVectorDB(queryVector, 3);
+
+    // [2단계: 토큰 세이버 - 로컬 유사도 컷오프 가드레일]
+    // ChromaDB 코사인 거리가 0.82 이상(유사도가 매우 희박함)이거나 검색 데이터가 없다면
+    // 엉뚱한 질문으로 판정하여 LLM API 호출을 거치지 않고 로컬에서 즉시 fail-safe 반환
+    const limitDistance = 0.82;
+    const isIrrelevant = searchResults.length === 0 || 
+                         (searchResults[0].distance !== null && searchResults[0].distance > limitDistance);
+
+    if (isIrrelevant) {
+      const topDistance = searchResults[0]?.distance;
+      console.log(`[🛡️ Local Guardrail Cutoff] 최고 유사도 점수 미달 (거리: ${topDistance !== null ? topDistance?.toFixed(4) : "없음"} > 임계치: ${limitDistance}). LLM 호출 차단.`);
+      
+      return {
+        status: "fail-safe",
+        answer: "죄송합니다. 입력하신 에러 현상 또는 질의에 관한 정확한 대응 규칙이 사내 소방 펌프 관리 매뉴얼(data/)에 기록되어 있지 않습니다. 작업자의 안전을 위해 임의 조치를 금하며, 즉시 비상 전원을 격리하고 유지보수 전문 파트너십 또는 정비 엔지니어에게 현장 정비 지원을 요청하십시오.",
+        citations: [],
+        nextSteps: ["메인 전원 스위치 OFF 및 수동 대기 유도", "소방 안전 책임 관리실 연락", "data/ 폴더에 새 소방 매뉴얼 업로드 후 임베딩 갱신"],
+        isCached: false
+      };
+    }
 
     // 3. RAG 텍스트 컨텍스트 및 역사 포맷팅
     const contextText = searchResults
@@ -91,7 +127,7 @@ ${res.document}`
     // 4. 최종 Gemini 프롬프트 구성
     const prompt = `
 [검색된 매뉴얼 컨텍스트]
-${contextText || "일치하는 매뉴얼 내용이 없습니다."}
+${contextText || "일치하는 매뉴얼 내용이 없습니다."}Prefix
 
 [이전 대화 이력]
 ${historyText || "(이전 대화 내용 없음)"}
@@ -119,7 +155,22 @@ ${historyText || "(이전 대화 내용 없음)"}
     const responseText = result.response.text();
 
     // 6. 획득한 JSON의 파싱 및 클렌징
-    return cleanAndParseJSON(responseText);
+    const parsedResponse = cleanAndParseJSON(responseText);
+
+    // [3단계: 신규 성공 답변을 미래 캐시 히트를 위해 QA 캐시 등록]
+    if (parsedResponse.status === "success") {
+      saveQACache(
+        query,
+        queryVector,
+        parsedResponse.answer,
+        parsedResponse.citations,
+        parsedResponse.nextSteps,
+        parsedResponse.status
+      );
+      console.log(`[⚡ QA Cache Saved] 미래 재질의를 위해 신규 응답을 로컬 캐시 디비에 보존합니다.`);
+    }
+
+    return parsedResponse;
   } catch (error) {
     console.error("장애 조치 AI 에이전트 호출 실패:", error);
     return {
