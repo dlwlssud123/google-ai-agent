@@ -132,3 +132,19 @@ export async function clearManualCollection() {
     console.log(`컬렉션 '${MANUAL_COLLECTION_NAME}' 삭제 실패 (존재하지 않을 수 있음):`, error);
   }
 }
+
+/**
+ * 특정 파일명에 기반하여 관련 ChromaDB 임베딩 문서들을 일괄 영구 제거합니다.
+ * @param sourceFileName 제거할 대상 파일명
+ */
+export async function deleteDocumentsFromVectorDB(sourceFileName: string) {
+  const collection = await getOrCreateManualCollection();
+  try {
+    await collection.delete({
+      where: { source: sourceFileName }
+    });
+    console.log(`ChromaDB에서 소스 '${sourceFileName}' 문서들을 삭제 완료했습니다.`);
+  } catch (error) {
+    console.error(`ChromaDB 문서 삭제 중 오류 발생 (${sourceFileName}):`, error);
+  }
+}

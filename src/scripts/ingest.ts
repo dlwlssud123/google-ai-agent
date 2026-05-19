@@ -5,7 +5,7 @@ import * as _pdf from "pdf-parse";
 // @ts-ignore
 const { PDFParse } = _pdf;
 import { getEmbedding, analyzeDocumentStructure, performOCR } from "../lib/gemini";
-import { addDocumentsToVectorDB, clearManualCollection } from "../lib/chroma";
+import { addDocumentsToVectorDB, clearManualCollection, deleteDocumentsFromVectorDB } from "../lib/chroma";
 import { addManual, updateManualStatus } from "../lib/db";
 
 // .env.local 환경 변수 명시적 로드
@@ -99,6 +99,9 @@ export async function runIngestion(options = { clearDB: true }) {
       // DB 상태 기록용 데이터 등록 (pending)
       const safeId = pdfFile.replace(/[^a-zA-Z0-9가-힣]/g, "_");
       addManual(pdfFile, stats.size);
+
+      // 개별 파일 적재 전, 중복 청크 적재 방지를 위한 해당 소스 벡터 선제 영구 소거 (멱등성 확보)
+      await deleteDocumentsFromVectorDB(pdfFile);
 
       // 2. PDF 페이지별 파싱
       console.log(`2. PDF 페이지 파싱 시작: ${pdfFile}`);
