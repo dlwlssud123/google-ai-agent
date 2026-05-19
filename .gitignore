@@ -42,3 +42,7 @@ next-env.d.ts
 
 # local databases
 chroma_db/
+
+# manual pdfs
+data/**/*.pdf
+data/*.pdf
