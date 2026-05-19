@@ -56,63 +56,78 @@ async function runIngestion() {
   }
 
   const docsDir = path.resolve(process.cwd(), "docs");
-  const targetPdfName = "UnHarenesedYU_이진녕_7614_A안.pdf";
-  const pdfPath = path.join(docsDir, targetPdfName);
-
-  if (!fs.existsSync(pdfPath)) {
-    console.error(`오류: 대상 PDF 파일을 찾을 수 없습니다. 경로: ${pdfPath}`);
+  
+  if (!fs.existsSync(docsDir)) {
+    console.error(`오류: docs 디렉토리를 찾을 수 없습니다. 경로: ${docsDir}`);
     process.exit(1);
   }
+
+  // docs 폴더 내의 모든 PDF 파일 검색
+  const filesInDocs = fs.readdirSync(docsDir);
+  const pdfFiles = filesInDocs.filter(file => path.extname(file).toLowerCase() === ".pdf");
+
+  if (pdfFiles.length === 0) {
+    console.error("오류: docs 디렉토리에 PDF 파일이 존재하지 않습니다.");
+    process.exit(1);
+  }
+
+  console.log(`발견된 PDF 파일 목록: ${pdfFiles.join(", ")}`);
 
   try {
     // 1. 기존 ChromaDB 컬렉션 비우기 (중복 적재 방지 및 테스트 초기화)
     console.log("1. 기존 벡터 컬렉션 초기화 중...");
     await clearManualCollection();
 
-    // 2. PDF 페이지별 파싱
-    console.log(`2. PDF 페이지 파싱 시작: ${targetPdfName}`);
-    const rawPages = await parsePdfByPages(pdfPath);
-    console.log(`파싱 완료. 총 ${rawPages.length}페이지 검출됨.`);
-
     const documentsToIngest = [];
 
-    // 3. 페이지별 데이터 정제 및 적재
-    for (let i = 0; i < rawPages.length; i++) {
-      const pageNum = i + 1;
-      const rawText = rawPages[i].trim();
-
-      if (!rawText) {
-        console.log(`[페이지 ${pageNum}] 텍스트가 비어 있어 건너뜁니다.`);
-        continue;
-      }
-
-      console.log(`[페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
+    // 각 PDF 파일 순회하며 처리
+    for (const pdfFile of pdfFiles) {
+      const pdfPath = path.join(docsDir, pdfFile);
+      console.log(`\n--- PDF 파일 처리 시작: ${pdfFile} ---`);
       
-      // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존)
-      const structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
+      // 2. PDF 페이지별 파싱
+      console.log(`2. PDF 페이지 파싱 시작: ${pdfFile}`);
+      const rawPages = await parsePdfByPages(pdfPath);
+      console.log(`파싱 완료. 총 ${rawPages.length}페이지 검출됨.`);
 
-      console.log(`[페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
-      // Gemini Embedding API 호출
-      const vector = await retryWithDelay(() => getEmbedding(structuredText));
+      // 3. 페이지별 데이터 정제 및 적재 준비
+      for (let i = 0; i < rawPages.length; i++) {
+        const pageNum = i + 1;
+        const rawText = rawPages[i].trim();
 
-      documentsToIngest.push({
-        id: `pdf_page_${pageNum}`,
-        vector,
-        text: structuredText,
-        metadata: {
-          source: targetPdfName,
-          page: pageNum,
-          type: "pdf"
+        if (!rawText) {
+          console.log(`[${pdfFile} - 페이지 ${pageNum}] 텍스트가 비어 있어 건너뜁니다.`);
+          continue;
         }
-      });
 
-      // API Rate Limit 방지를 위한 짧은 딜레이
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+        console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
+        
+        // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존)
+        const structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
+
+        console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
+        // Gemini Embedding API 호출
+        const vector = await retryWithDelay(() => getEmbedding(structuredText));
+
+        // 고유 ID 생성 (파일명과 페이지 번호 결합)
+        const safeFileName = pdfFile.replace(/[^a-zA-Z0-9가-힣]/g, "_");
+        documentsToIngest.push({
+          id: `pdf_${safeFileName}_page_${pageNum}`,
+          vector,
+          text: structuredText,
+          metadata: {
+            source: pdfFile,
+            page: pageNum,
+            type: "pdf"
+          }
+        });
+
+        // API Rate Limit 방지를 위한 짧은 딜레이
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     }
 
     // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원
-    // docs 폴더에 샘플 이미지(.png, .jpg, .jpeg)가 있다면 자동으로 OCR하여 적재
-    const filesInDocs = fs.readdirSync(docsDir);
     const imageExtensions = [".png", ".jpg", ".jpeg"];
     let virtualPageNum = 100; // 이미지 파일은 가상의 100번대 페이지부터 할당
 
@@ -134,8 +149,9 @@ async function runIngestion() {
         console.log(`[${file}] 텍스트 임베딩 생성 중...`);
         const vector = await retryWithDelay(() => getEmbedding(ocrText));
 
+        const safeImageName = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
         documentsToIngest.push({
-          id: `image_ocr_${file.replace(/\.[^/.]+$/, "")}`,
+          id: `image_ocr_${safeImageName}`,
           vector,
           text: ocrText,
           metadata: {
