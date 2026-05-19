@@ -20,9 +20,17 @@ export interface QACacheItem {
   createdAt: string;
 }
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  createdAt: string;
+}
+
 export interface DatabaseSchema {
   manuals: ManualMetadata[];
   qa_cache: QACacheItem[];
+  sessions?: ChatSession[];
 }
 
 const DB_DIR = path.resolve(process.cwd(), "data");
@@ -35,17 +43,21 @@ function initDB(): DatabaseSchema {
   }
 
   if (!fs.existsSync(DB_PATH)) {
-    const initialData: DatabaseSchema = { manuals: [], qa_cache: [] };
+    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [] };
     fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2), "utf8");
     return initialData;
   }
 
   try {
     const raw = fs.readFileSync(DB_PATH, "utf8");
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+    if (!data.sessions) {
+      data.sessions = [];
+    }
+    return data;
   } catch (error) {
     console.error("[Local DB Error] db.json 파싱 오류, 초기화합니다.", error);
-    const initialData: DatabaseSchema = { manuals: [], qa_cache: [] };
+    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [] };
     fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2), "utf8");
     return initialData;
   }
@@ -212,5 +224,59 @@ export function clearAllData() {
   const db = initDB();
   db.manuals = [];
   db.qa_cache = [];
+  db.sessions = [];
+  saveDB(db);
+}
+
+// ----------------------------------------------------
+// 채팅 세션 관리 API
+// ----------------------------------------------------
+
+export function getSessions(): ChatSession[] {
+  const db = initDB();
+  return db.sessions || [];
+}
+
+export function createSession(title = "새로운 대화"): ChatSession {
+  const db = initDB();
+  if (!db.sessions) db.sessions = [];
+
+  const newSession: ChatSession = {
+    id: `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+    title,
+    messages: [],
+    createdAt: new Date().toISOString(),
+  };
+
+  db.sessions.push(newSession);
+  saveDB(db);
+  return newSession;
+}
+
+export function updateSessionMessages(id: string, messages: any[]) {
+  const db = initDB();
+  if (!db.sessions) db.sessions = [];
+
+  const session = db.sessions.find((s) => s.id === id);
+  if (session) {
+    session.messages = messages;
+    
+    // 첫 메시지가 있으면 타이틀을 첫 질문의 일부로 자동 업데이트
+    if (session.title === "새로운 대화" && messages.length > 0) {
+      const firstUserMsg = messages.find(m => m.role === "user");
+      if (firstUserMsg && firstUserMsg.content) {
+        session.title = firstUserMsg.content.substring(0, 16) + (firstUserMsg.content.length > 16 ? "..." : "");
+      }
+    }
+    
+    saveDB(db);
+  }
+}
+
+export function deleteSession(id: string) {
+  const db = initDB();
+  if (!db.sessions) db.sessions = [];
+
+  db.sessions = db.sessions.filter((s) => s.id !== id);
   saveDB(db);
 }

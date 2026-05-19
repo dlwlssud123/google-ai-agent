@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { askAgent, ChatMessage, ChatResponse } from "./actions/chat";
+import { askAgent, ChatResponse } from "./actions/chat";
 import { 
   uploadAndIngestFileAction, 
   getUploadedFilesAction, 
@@ -9,6 +9,21 @@ import {
   forceRunIngestionAction,
   clearAllEmbeddingsAction
 } from "./actions/ingestActions";
+import {
+  getSessionsAction,
+  createSessionAction,
+  updateSessionMessagesAction,
+  deleteSessionAction
+} from "./actions/sessionActions";
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  status?: "success" | "fail-safe";
+  citations?: { source: string; page: number }[];
+  nextSteps?: string[];
+  isCached?: boolean;
+}
 
 export interface ManualFile {
   id: string;
@@ -21,9 +36,12 @@ export interface ManualFile {
 export default function Home() {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [responses, setResponses] = useState<Record<number, ChatResponse>>({});
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 멀티 세션 상태 관리
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   // 파일 업로드 및 실시간 RAG 적재 상태 관리
   const [manualFiles, setManualFiles] = useState<ManualFile[]>([]);
@@ -43,9 +61,10 @@ export default function Home() {
     scrollToBottom();
   }, [messages, loading]);
 
-  // 마운트 시 실시간 적재된 파일 목록 조회
+  // 마운트 시 실시간 적재된 파일 목록 및 세션 로드
   useEffect(() => {
     fetchUploadedFiles();
+    fetchSessions();
   }, []);
 
   const fetchUploadedFiles = async () => {
@@ -56,6 +75,94 @@ export default function Home() {
       }
     } catch (e) {
       console.error("파일 목록 패치 실패:", e);
+    }
+  };
+
+  const fetchSessions = async (targetSessionId: string | null = null) => {
+    try {
+      const res = await getSessionsAction();
+      if (res.success && res.sessions) {
+        setSessions(res.sessions);
+        
+        // 만약 세션 목록이 비어 있으면, 기본 세션을 하나 자동 생성
+        if (res.sessions.length === 0) {
+          const createRes = await createSessionAction("새로운 대화");
+          if (createRes.success && createRes.session) {
+            setSessions([createRes.session]);
+            setCurrentSessionId(createRes.session.id);
+            setMessages([]);
+          }
+        } else {
+          // targetSessionId 가 전달되면 해당 세션을 사용하고, 없으면 현재 선택된 세션이나 첫 번째 세션 사용
+          const nextSessionId = targetSessionId || currentSessionId || res.sessions[0].id;
+          
+          // 해당 세션이 실제로 존재하는지 체크
+          const exist = res.sessions.find((s: any) => s.id === nextSessionId);
+          if (exist) {
+            setCurrentSessionId(nextSessionId);
+            setMessages(exist.messages || []);
+          } else {
+            setCurrentSessionId(res.sessions[0].id);
+            setMessages(res.sessions[0].messages || []);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("세션 목록 로드 실패:", e);
+    }
+  };
+
+  // 특정 세션 선택 핸들러
+  const handleSelectSession = (sessionId: string) => {
+    setCurrentSessionId(sessionId);
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session) {
+      setMessages(session.messages || []);
+    }
+  };
+
+  // 신규 세션 생성 핸들러
+  const handleCreateSession = async () => {
+    try {
+      const res = await createSessionAction("새로운 대화");
+      if (res.success && res.session) {
+        setSessions((prev) => [...prev, res.session]);
+        setCurrentSessionId(res.session.id);
+        setMessages([]);
+      }
+    } catch (e) {
+      console.error("신규 세션 생성 실패:", e);
+    }
+  };
+
+  // 세션 개별 삭제 핸들러
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // 세션 선택 이벤트 전파 방지
+    if (!confirm("이 대화방을 삭제하시겠습니까?")) return;
+
+    try {
+      const res = await deleteSessionAction(sessionId);
+      if (res.success) {
+        const updated = sessions.filter((s) => s.id !== sessionId);
+        setSessions(updated);
+        
+        if (currentSessionId === sessionId) {
+          if (updated.length > 0) {
+            setCurrentSessionId(updated[0].id);
+            setMessages(updated[0].messages || []);
+          } else {
+            // 남은 세션이 없으면 기본 새 대화방 자동 생성
+            const createRes = await createSessionAction("새로운 대화");
+            if (createRes.success && createRes.session) {
+              setSessions([createRes.session]);
+              setCurrentSessionId(createRes.session.id);
+              setMessages([]);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("세션 삭제 실패:", err);
     }
   };
 
@@ -170,7 +277,7 @@ export default function Home() {
         setActionStage("success");
         setActionMessage(res.message || "전체 삭제 성공");
         setMessages([]); // 초기화 시 대화 이력도 비움
-        setResponses({});
+        await fetchSessions();
         setTimeout(() => setActionStage("idle"), 4000);
       } else {
         setActionStage("error");
@@ -213,29 +320,52 @@ export default function Home() {
     setQuery("");
 
     // 1. 작업자 메시지 즉시 렌더링 추가
-    const newHistory: ChatMessage[] = [...messages, { role: "user", content: userText }];
+    const userMsg: ChatMessage = { role: "user", content: userText };
+    const newHistory = [...messages, userMsg];
     setMessages(newHistory);
     setLoading(true);
 
+    // 임시로 세션에도 유저의 질문은 즉시 동기화해 둠 (유저의 대화 도중 새로고침 시 이탈 방지)
+    if (currentSessionId) {
+      await updateSessionMessagesAction(currentSessionId, newHistory);
+    }
+
     try {
       // 2. Server Action 호출 (RAG + Gemini 2.5)
-      const res = await askAgent(userText, messages);
+      // 이전 히스토리는 RAG 메타데이터를 제외한 순수 {role, content} 배열만 전달
+      const cleanHistory = newHistory.map(({ role, content }) => ({ role, content }));
+      const res = await askAgent(userText, cleanHistory.slice(0, -1));
 
       // 3. 답변 및 이력 기록 저장
-      setMessages((prev) => [...prev, { role: "assistant", content: res.answer }]);
-      setResponses((prev) => ({
-        ...prev,
-        [newHistory.length]: res
-      }));
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: res.answer,
+        status: res.status,
+        citations: res.citations,
+        nextSteps: res.nextSteps,
+        isCached: res.isCached
+      };
+      
+      const updatedMessages = [...newHistory, assistantMsg];
+      setMessages(updatedMessages);
+      
+      if (currentSessionId) {
+        await updateSessionMessagesAction(currentSessionId, updatedMessages);
+        // 세션 목록 갱신 (첫 질문으로 방 타이틀이 바뀔 수 있으므로 패치하되 현재 활성 세션 유지)
+        await fetchSessions(currentSessionId);
+      }
     } catch (e) {
       console.error(e);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "장애 조치 AI 에이전트와 통신하는 도중 오류가 발생했습니다. 환경설정 또는 API 키 상태를 확인하십시오."
-        }
-      ]);
+      const errorMsg: ChatMessage = {
+        role: "assistant",
+        content: "장애 조치 AI 에이전트와 통신하는 도중 오류가 발생했습니다. 환경설정 또는 API 키 상태를 확인하십시오."
+      };
+      const updatedMessages = [...newHistory, errorMsg];
+      setMessages(updatedMessages);
+      
+      if (currentSessionId) {
+        await updateSessionMessagesAction(currentSessionId, updatedMessages);
+      }
     } finally {
       setLoading(false);
     }
@@ -356,7 +486,60 @@ export default function Home() {
         </div>
 
         {/* 연동 데이터 정보 & 실시간 업로드 컴포넌트 */}
-        <div className="mt-5 flex-1 space-y-5 overflow-y-auto pr-1">
+        <div className="mt-5 flex-1 space-y-5 overflow-y-auto pr-1 flex flex-col min-h-0">
+          {/* 채팅방 세션 목록 영역 */}
+          <div className="flex flex-col min-h-0 shrink-0">
+            <div className="flex justify-between items-center mb-2.5">
+              <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">채팅 대화방</h3>
+              <button 
+                onClick={handleCreateSession}
+                className="text-[9px] font-bold text-white bg-indigo-650 hover:bg-indigo-550 px-2 py-0.5 rounded border border-indigo-500/30 transition-all flex items-center gap-1 shadow-sm"
+              >
+                <span>+</span> 새 대화
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto custom-scrollbar space-y-1.5 pr-1 max-h-40 bg-zinc-950/40 border border-zinc-900 rounded-xl p-2">
+              {sessions.length === 0 ? (
+                <div className="text-center py-4">
+                  <p className="text-[10px] text-zinc-500 font-medium">생성된 대화방이 없습니다.</p>
+                </div>
+              ) : (
+                sessions.map((session) => {
+                  const isActive = session.id === currentSessionId;
+                  return (
+                    <div 
+                      key={session.id} 
+                      onClick={() => handleSelectSession(session.id)}
+                      className={`flex justify-between items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-all border group ${
+                        isActive 
+                          ? "bg-indigo-600/10 border-indigo-500/30 text-zinc-100 shadow-inner" 
+                          : "bg-transparent border-transparent hover:bg-zinc-900/30 hover:border-zinc-900 text-zinc-400 hover:text-zinc-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs shrink-0">💬</span>
+                        <span className="text-[11px] font-medium truncate" title={session.title}>
+                          {session.title}
+                        </span>
+                      </div>
+                      
+                      <button 
+                        onClick={(e) => handleDeleteSession(session.id, e)}
+                        className="text-zinc-500 hover:text-rose-400 p-0.5 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
+                        title="이 대화방 삭제"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
           {/* 매뉴얼 적재 리스트 (동적 연동) */}
           <div>
             <div className="flex justify-between items-center mb-2.5">
@@ -381,7 +564,7 @@ export default function Home() {
               </div>
             </div>
             
-            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2 max-h-44 overflow-y-auto custom-scrollbar">
               {manualFiles.length === 0 ? (
                 <div className="text-center py-4">
                   <p className="text-[10px] text-zinc-500 font-medium">연동된 매뉴얼 파일이 없습니다.</p>
@@ -472,32 +655,6 @@ export default function Home() {
               <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">{actionMessage}</p>
             </div>
           )}
-
-          {/* 시스템 정보 */}
-          <div>
-            <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2.5">시스템 정보</h3>
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
-                <span className="text-zinc-500 font-medium">LLM 엔진</span>
-                <span className="text-zinc-300 font-bold">Gemini 2.5 Flash</span>
-              </div>
-              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
-                <span className="text-zinc-500 font-medium">Embedding 모델</span>
-                <span className="text-indigo-400 font-bold text-[10px]">gemini-embedding-2</span>
-              </div>
-              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
-                <span className="text-zinc-500 font-medium">Vector DB</span>
-                <span className="text-zinc-300 font-bold">ChromaDB Local</span>
-              </div>
-              <div className="flex justify-between items-center bg-zinc-950/40 px-3 py-2 rounded-lg border border-zinc-900 text-[11px]">
-                <span className="text-zinc-500 font-medium">가드레일 모드</span>
-                <span className="flex items-center gap-1.5 text-emerald-400 font-extrabold text-[10px]">
-                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping"></span>
-                  Active (엄격)
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* 풋터 영역 */}
@@ -594,7 +751,7 @@ export default function Home() {
             <div className="max-w-3xl mx-auto space-y-6">
               {messages.map((msg, index) => {
                 const isUser = msg.role === "user";
-                const responseData = responses[index];
+                const responseData = msg;
 
                 return (
                   <div key={index} className={`flex flex-col ${isUser ? "items-end" : "items-start"} w-full`}>
@@ -753,10 +910,7 @@ export default function Home() {
                 )}
               </button>
             </form>
-            <div className="flex justify-between items-center text-[10px] text-zinc-500 mt-2 px-1 font-semibold">
-              <span>⚠️ 최종 책임은 실제 기기 유지보수 작업자 본인에게 있습니다. (Human-in-the-loop)</span>
-              <span>v1.0.0</span>
-            </div>
+
           </div>
         </div>
       </div>
