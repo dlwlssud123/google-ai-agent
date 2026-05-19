@@ -32,14 +32,21 @@ async function parsePdfByPages(pdfPath: string): Promise<string[]> {
 /**
  * Gemini API 호출 중 발생할 수 있는 일시적 장애(503) 및 속도 제한(429)을 방지하기 위한 지수 백오프 기반 재시도 유틸리티
  */
-async function retryWithDelay<T>(fn: () => Promise<T>, retries = 3, delayMs = 3000): Promise<T> {
+async function retryWithDelay<T>(fn: () => Promise<T>, retries = 10, delayMs = 3000): Promise<T> {
   try {
     return await fn();
-  } catch (error) {
+  } catch (error: any) {
     if (retries <= 0) throw error;
-    console.warn(`[Gemini API 오류 발생] ${delayMs}ms 후 재시도합니다... (남은 횟수: ${retries})`);
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-    return retryWithDelay(fn, retries - 1, delayMs * 1.5);
+    
+    const errMsg = error?.message || String(error);
+    const isRateLimit = errMsg.includes("429") || errMsg.toLowerCase().includes("quota") || errMsg.toLowerCase().includes("limit");
+    
+    // Rate limit 에러가 나면 대기 시간을 대폭 늘림 (기본 15초)
+    const activeDelay = isRateLimit ? Math.max(delayMs, 15000) : delayMs;
+    
+    console.warn(`[Gemini API 오류 발생] ${activeDelay}ms 후 재시도합니다... (남은 횟수: ${retries}) (원인: ${errMsg.substring(0, 100)}...)`);
+    await new Promise((resolve) => setTimeout(resolve, activeDelay));
+    return retryWithDelay(fn, retries - 1, activeDelay * 1.5);
   }
 }
 
@@ -49,6 +56,7 @@ async function retryWithDelay<T>(fn: () => Promise<T>, retries = 3, delayMs = 30
 async function runConcurrent<T, R>(
   items: T[],
   concurrency: number,
+  delayMs: number,
   fn: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
   const results: R[] = [];
@@ -60,8 +68,8 @@ async function runConcurrent<T, R>(
       if (!next) break;
       const [index, item] = next;
       results[index] = await fn(item, index);
-      // API Rate Limit (RPM) 안정을 위해 작업 사이사이에 아주 미세한 지연 제공
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // API Rate Limit (RPM) 안정을 위해 설정된 지연 제공
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   });
   
@@ -73,7 +81,7 @@ async function runConcurrent<T, R>(
  * 인제스천 메인 실행 함수 (웹/서버액션에서 임포트 가능하도록 export)
  * @param options clearDB: true이면 ChromaDB를 초기화하고 data/ 폴더 전체를 새로 적재합니다.
  */
-export async function runIngestion(options = { clearDB: true }) {
+export async function runIngestion(options = { clearDB: true, freeTier: true }) {
   console.log("=== [3단계] 데이터 적재 파이프라인 (Data Ingestion) 시작 ===");
 
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -83,6 +91,12 @@ export async function runIngestion(options = { clearDB: true }) {
     if (require.main === module) process.exit(1);
     throw new Error("유효한 GEMINI_API_KEY가 설정되어 있지 않습니다.");
   }
+
+  // freeTier 옵션에 따른 동시성 및 딜레이 설정
+  const concurrency = options.freeTier ? 1 : 3;
+  const delayMs = options.freeTier ? 4000 : 150;
+  const imgConcurrency = options.freeTier ? 1 : 2;
+  const imgDelayMs = options.freeTier ? 4000 : 150;
 
   // 대상 디렉터리를 docs/에서 data/로 완벽 단일화 이전
   const dataDir = path.resolve(process.cwd(), "data");
@@ -168,11 +182,11 @@ export async function runIngestion(options = { clearDB: true }) {
 
       let activePageCount = 0;
 
-      // 3. 페이지별 데이터 정제 및 적재 준비 (동시성 3 병렬 처리 적용하여 초고속 임베딩 생성)
-      console.log(`[${pdfFile}] 임베딩 파이프라인 병렬화 가동 (동시성 한도: 3)...`);
+      // 3. 페이지별 데이터 정제 및 적재 준비 (동시성 1 혹은 3 병렬 처리 적용하여 임베딩 생성)
+      console.log(`[${pdfFile}] 임베딩 파이프라인 가동 (동시성 한도: ${concurrency}, 지연 시간: ${delayMs}ms)...`);
       const pageIndices = Array.from({ length: rawPages.length }, (_, idx) => idx);
 
-      await runConcurrent(pageIndices, 3, async (i) => {
+      await runConcurrent(pageIndices, concurrency, delayMs, async (i) => {
         const pageNum = i + 1;
         const rawText = rawPages[i].trim();
 
@@ -219,7 +233,7 @@ export async function runIngestion(options = { clearDB: true }) {
       }
     }
 
-    // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원 (동시성 2 병렬 처리 적용)
+    // 4. (추가 기능) 이미지 파일 OCR 및 적재 지원 (동시성 1 혹은 2 병렬 처리 적용)
     const imageExtensions = [".png", ".jpg", ".jpeg"];
     const imageFilesToProcess = filesInDocs.filter(file => {
       const ext = path.extname(file).toLowerCase();
@@ -230,7 +244,7 @@ export async function runIngestion(options = { clearDB: true }) {
 
     if (imageFilesToProcess.length > 0) {
       console.log(`\n[비정형 이미지 발견] 총 ${imageFilesToProcess.length}개 이미지 병렬 OCR 및 임베딩 처리 가동...`);
-      await runConcurrent(imageFilesToProcess, 2, async (file) => {
+      await runConcurrent(imageFilesToProcess, imgConcurrency, imgDelayMs, async (file) => {
         const ext = path.extname(file).toLowerCase();
         const safeImageId = file.replace(/[^a-zA-Z0-9가-힣]/g, "_");
         try {
@@ -293,9 +307,12 @@ const isDirectRun = require.main === module || (process.argv[1] && process.argv[
 if (isDirectRun) {
   const clearDBArg = process.argv.find(arg => arg.startsWith("--clearDB="));
   const clearDB = clearDBArg ? clearDBArg.split("=")[1] === "true" : true;
+
+  const freeTierArg = process.argv.find(arg => arg.startsWith("--freeTier="));
+  const freeTier = freeTierArg ? freeTierArg.split("=")[1] === "true" : true;
   
-  console.log(`[CLI Run] 인제스천 실행 옵션 - clearDB: ${clearDB}`);
-  runIngestion({ clearDB })
+  console.log(`[CLI Run] 인제스천 실행 옵션 - clearDB: ${clearDB}, freeTier: ${freeTier}`);
+  runIngestion({ clearDB, freeTier })
     .then(() => {
       console.log("CLI 인제스천 성공적으로 완료");
       process.exit(0);
