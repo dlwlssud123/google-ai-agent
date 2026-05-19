@@ -78,6 +78,7 @@ async function runIngestion() {
     console.log("1. 기존 벡터 컬렉션 초기화 중...");
     await clearManualCollection();
 
+    let skipLLMStructure = false;
     const documentsToIngest = [];
 
     // 각 PDF 파일 순회하며 처리
@@ -100,14 +101,18 @@ async function runIngestion() {
           continue;
         }
 
-        console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
-        
         let structuredText = rawText;
-        try {
-          // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존) 시도
-          structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
-        } catch (llmError) {
-          console.warn(`[경고] Gemini LLM 구조 정제 실패 (할당량 초과 또는 API 오류). 원시 텍스트를 그대로 사용합니다. 에러: ${(llmError as any).message || llmError}`);
+        if (!skipLLMStructure) {
+          console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 해석 및 정제 중...`);
+          try {
+            // Gemini LLM을 통한 의미 기반 구조화 및 정제 (표, 리스트 보존) 시도
+            structuredText = await retryWithDelay(() => analyzeDocumentStructure(rawText));
+          } catch (llmError) {
+            console.warn(`[경고] Gemini LLM 구조 정제 실패 (할당량 초과 또는 API 오류). 이후 페이지부터 구조 정제를 건너뛰고 원시 텍스트를 그대로 사용합니다. 에러: ${(llmError as any).message || llmError}`);
+            skipLLMStructure = true;
+          }
+        } else {
+          console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 구조 정제 건너뜀 (플래그 활성화)`);
         }
 
         console.log(`[${pdfFile} - 페이지 ${pageNum}/${rawPages.length}] 텍스트 임베딩 생성 중...`);
