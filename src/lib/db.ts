@@ -206,3 +206,11 @@ export function clearQACache() {
   db.qa_cache = [];
   saveDB(db);
 }
+
+// 모든 업로드 매뉴얼 및 QA 캐시 데이터를 완전히 초기화할 때 사용
+export function clearAllData() {
+  const db = initDB();
+  db.manuals = [];
+  db.qa_cache = [];
+  saveDB(db);
+}

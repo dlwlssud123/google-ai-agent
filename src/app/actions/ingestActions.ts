@@ -2,9 +2,9 @@
 
 import fs from "fs";
 import path from "path";
-import { addManual, getManuals, deleteManual } from "@/lib/db";
+import { addManual, getManuals, deleteManual, clearAllData } from "@/lib/db";
 import { runIngestion } from "@/scripts/ingest";
-import { deleteDocumentsFromVectorDB } from "@/lib/chroma";
+import { deleteDocumentsFromVectorDB, clearManualCollection } from "@/lib/chroma";
 
 /**
  * 웹 프론트엔드로부터 파일을 받아 data/ 디렉터리에 저장한 뒤 실시간 RAG 임베딩(인제스천)을 트리거합니다.
@@ -93,5 +93,41 @@ export async function forceRunIngestionAction() {
     return { success: true, message: `인제스천 초기화 갱신 성공! (총 ${result.count}개 청크 재적재)` };
   } catch (error) {
     return { success: false, message: `인제스천 갱신 실패: ${(error as any).message || error}` };
+  }
+}
+
+/**
+ * ChromaDB의 모든 컬렉션 데이터를 지우고, 로컬 저장된 모든 PDF 파일 및 DB 메타데이터/캐시를 완전히 삭제하여 
+ * RAG 시스템을 공장 초기화 상태로 되돌립니다.
+ */
+export async function clearAllEmbeddingsAction() {
+  try {
+    // 1. ChromaDB의 매뉴얼 컬렉션 영구 삭제
+    await clearManualCollection();
+    console.log("[Web ClearAll] ChromaDB 컬렉션 삭제 완료");
+
+    // 2. data/ 폴더 안의 db.json을 제외한 모든 실제 파일들 삭제
+    const dataDir = path.resolve(process.cwd(), "data");
+    if (fs.existsSync(dataDir)) {
+      const files = fs.readdirSync(dataDir);
+      for (const file of files) {
+        if (file !== "db.json") {
+          const filePath = path.join(dataDir, file);
+          if (fs.statSync(filePath).isFile()) {
+            fs.unlinkSync(filePath);
+            console.log(`[Web ClearAll] 디스크 파일 삭제 완료: ${file}`);
+          }
+        }
+      }
+    }
+
+    // 3. db.json 내의 manuals 및 qa_cache 데이터를 완전히 리셋
+    clearAllData();
+    console.log("[Web ClearAll] local db.json 데이터 초기화 완료");
+
+    return { success: true, message: "모든 임베딩 데이터와 원본 파일, 질문 캐시가 완전히 삭제되었습니다." };
+  } catch (error) {
+    console.error("[Web ClearAll Error] 전체 초기화 실패:", error);
+    return { success: false, message: `초기화 실패: ${(error as any).message || error}` };
   }
 }

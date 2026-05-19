@@ -6,7 +6,8 @@ import {
   uploadAndIngestFileAction, 
   getUploadedFilesAction, 
   deleteManualAction,
-  forceRunIngestionAction 
+  forceRunIngestionAction,
+  clearAllEmbeddingsAction
 } from "./actions/ingestActions";
 
 export interface ManualFile {
@@ -147,6 +148,37 @@ export default function Home() {
     } catch (err: any) {
       setActionStage("error");
       setActionMessage(`동작 실패: ${err.message || err}`);
+    } finally {
+      setActionLoading(false);
+      fetchUploadedFiles();
+    }
+  };
+
+  // 전체 데이터 초기화 핸들러
+  const handleClearAll = async () => {
+    if (!confirm("주의: ChromaDB의 모든 임베딩, 로컬에 저장된 모든 매뉴얼 원본 PDF 및 질문 캐시를 완전히 영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) {
+      return;
+    }
+
+    setActionLoading(true);
+    setActionStage("ingesting");
+    setActionMessage("모든 매뉴얼 및 ChromaDB 임베딩, 캐시 삭제 중...");
+
+    try {
+      const res = await clearAllEmbeddingsAction();
+      if (res.success) {
+        setActionStage("success");
+        setActionMessage(res.message || "전체 삭제 성공");
+        setMessages([]); // 초기화 시 대화 이력도 비움
+        setResponses({});
+        setTimeout(() => setActionStage("idle"), 4000);
+      } else {
+        setActionStage("error");
+        setActionMessage(res.message || "삭제 실패");
+      }
+    } catch (err: any) {
+      setActionStage("error");
+      setActionMessage(`초기화 오류: ${err.message || err}`);
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
@@ -329,14 +361,24 @@ export default function Home() {
           <div>
             <div className="flex justify-between items-center mb-2.5">
               <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">연동 및 적재 매뉴얼 ({manualFiles.length})</h3>
-              <button 
-                onClick={handleForceRebuild}
-                disabled={actionLoading}
-                className="text-[9px] font-bold text-zinc-400 bg-zinc-850 hover:bg-zinc-800 hover:text-indigo-400 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
-                title="데이터베이스 전체 재임베딩 강제 실행"
-              >
-                🔄 전체 갱신
-              </button>
+              <div className="flex gap-1.5">
+                <button 
+                  onClick={handleForceRebuild}
+                  disabled={actionLoading}
+                  className="text-[9px] font-bold text-zinc-400 bg-zinc-850 hover:bg-zinc-800 hover:text-indigo-400 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
+                  title="데이터베이스 전체 재임베딩 강제 실행"
+                >
+                  🔄 전체 갱신
+                </button>
+                <button 
+                  onClick={handleClearAll}
+                  disabled={actionLoading}
+                  className="text-[9px] font-bold text-rose-400 bg-zinc-850 hover:bg-zinc-800 hover:text-rose-350 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
+                  title="모든 임베딩 및 원본 파일, 질문 캐시 영구 제거"
+                >
+                  🗑️ 전체 삭제
+                </button>
+              </div>
             </div>
             
             <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
@@ -367,7 +409,7 @@ export default function Home() {
                     <button 
                       onClick={() => handleFileDelete(file.id, file.fileName)}
                       disabled={actionLoading}
-                      className="text-zinc-500 hover:text-rose-400 p-1 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
+                      className="text-zinc-500 hover:text-rose-400 p-1 opacity-40 hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
                       title="ChromaDB 및 디스크에서 즉시 영구 삭제"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
