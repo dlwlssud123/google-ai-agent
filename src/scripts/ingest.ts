@@ -265,7 +265,17 @@ const currentFilePath = typeof __filename !== 'undefined' ? __filename : '';
 const isDirectRun = require.main === module || (process.argv[1] && process.argv[1].endsWith("ingest.ts"));
 
 if (isDirectRun) {
-  runIngestion()
-    .then(() => console.log("CLI 인제스천 완료"))
-    .catch((err) => console.error("CLI 인제스천 실패:", err));
+  const clearDBArg = process.argv.find(arg => arg.startsWith("--clearDB="));
+  const clearDB = clearDBArg ? clearDBArg.split("=")[1] === "true" : true;
+  
+  console.log(`[CLI Run] 인제스천 실행 옵션 - clearDB: ${clearDB}`);
+  runIngestion({ clearDB })
+    .then(() => {
+      console.log("CLI 인제스천 성공적으로 완료");
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("CLI 인제스천 실행 실패:", err);
+      process.exit(1);
+    });
 }

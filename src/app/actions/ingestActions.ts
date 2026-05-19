@@ -2,9 +2,12 @@
 
 import fs from "fs";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { addManual, getManuals, deleteManual, clearAllData } from "@/lib/db";
-import { runIngestion } from "@/scripts/ingest";
 import { deleteDocumentsFromVectorDB, clearManualCollection } from "@/lib/chroma";
+
+const execPromise = promisify(exec);
 
 /**
  * 웹 프론트엔드로부터 파일을 받아 data/ 디렉터리에 저장한 뒤 실시간 RAG 임베딩(인제스천)을 트리거합니다.
@@ -32,11 +35,16 @@ export async function uploadAndIngestFileAction(formData: FormData) {
     console.log(`[Web Upload] 파일 디스크 저장 완료: ${file.name} (${file.size} bytes)`);
 
     // 2. 실시간 인제스천 수행 (clearDB: false로 설정하여 기존 벡터 DB를 보존하고 누적 적재)
-    const result = await runIngestion({ clearDB: false });
+    // Next.js SSR Webpack 번들 내 pdfjs-dist worker 임포트 문제를 우회하기 위해 CLI 프로세스 격리 실행
+    const command = `npx tsx src/scripts/ingest.ts --clearDB=false`;
+    console.log(`[Web Upload] CLI 프로세스로 인제스천 가동: ${command}`);
+    const { stdout, stderr } = await execPromise(command, { env: process.env });
+    console.log("[CLI Ingest Output]", stdout);
+    if (stderr) console.warn("[CLI Ingest Warning]", stderr);
     
     return { 
       success: true, 
-      message: `매뉴얼 '${file.name}' 업로드 및 RAG 적재 성공! (총 ${result.count}개 청크 반영)` 
+      message: `매뉴얼 '${file.name}' 업로드 및 RAG 적재 성공! (백그라운드 CLI 프로세스 반영 완료)` 
     };
   } catch (error) {
     console.error("[Web Ingest Error] 파일 실시간 적재 실패:", error);
@@ -89,8 +97,13 @@ export async function deleteManualAction(id: string) {
  */
 export async function forceRunIngestionAction() {
   try {
-    const result = await runIngestion({ clearDB: true });
-    return { success: true, message: `인제스천 초기화 갱신 성공! (총 ${result.count}개 청크 재적재)` };
+    const command = `npx tsx src/scripts/ingest.ts --clearDB=true`;
+    console.log(`[Web Rebuild] CLI 프로세스로 전체 인제스천 가동: ${command}`);
+    const { stdout, stderr } = await execPromise(command, { env: process.env });
+    console.log("[CLI Rebuild Output]", stdout);
+    if (stderr) console.warn("[CLI Rebuild Warning]", stderr);
+    
+    return { success: true, message: `인제스천 초기화 갱신 성공! (전체 재적재 완료)` };
   } catch (error) {
     return { success: false, message: `인제스천 갱신 실패: ${(error as any).message || error}` };
   }
