@@ -56,27 +56,18 @@ import path from "path";
 let embeddingPipeline: any = null;
 
 /**
- * 주어진 텍스트의 임베딩 벡터를 반환합니다. (로컬 임베딩 전환)
+ * 주어진 텍스트의 임베딩 벡터를 반환합니다. (Gemini 고성능 클라우드 임베딩 API 복귀)
  * @param text 임베딩할 문자열
- * @returns 384차원의 실수 배열 (임베딩 벡터)
+ * @returns 768차원의 실수 배열 (임베딩 벡터)
  */
 export async function getEmbedding(text: string): Promise<number[]> {
-  if (!embeddingPipeline) {
-    console.log("[Transformers.js] 로컬 임베딩 모델 로딩 중... (최초 1회 다운로드 발생 가능)");
-    
-    // Webpack 번들링 및 SSR 런타임 충돌 방지를 위해 동적 임포트 사용
-    const { pipeline, env } = await import("@xenova/transformers");
-    
-    // 로컬 환경 캐시 디렉터리 설정 (Docker 내 nextjs 유저가 쓰기 권한이 있는 data/ 폴더 하위로 지정)
-    env.cacheDir = path.resolve(process.cwd(), "data", ".cache", "transformers");
-    
-    embeddingPipeline = await pipeline("feature-extraction", "Xenova/paraphrase-multilingual-MiniLM-L12-v2");
-    console.log("[Transformers.js] 임베딩 모델 로드 완료!");
-  }
-  
-  // 텍스트 임베딩 추출 (mean pooling + 정규화)
-  const result = await embeddingPipeline(text, { pooling: "mean", normalize: true });
-  return Array.from(result.data);
+  return callWithRetry(async () => {
+    const genAI = getGeminiClient();
+    // Gemini의 최신 고성능 텍스트 임베딩 모델 사용 (768차원, 의미 파악 능력이 로컬 모델보다 압도적으로 뛰어남)
+    const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const result = await model.embedContent(text);
+    return result.embedding.values;
+  });
 }
 
 /**
