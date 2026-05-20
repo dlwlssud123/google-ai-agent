@@ -5,10 +5,24 @@
 # 새로운 커밋이 발견될 시 git pull 및 docker-compose 재빌드를 자동 수행합니다.
 # -----------------------------------------------------------------------------
 
-REPO_DIR="$HOME/google-ai-agent/google-ai-agent"
+# ── 중복 실행 방지 (PID lock) ──────────────────────────────────────────────
+LOCK_FILE="/tmp/auto-deploy.lock"
+
+if [ -f "$LOCK_FILE" ]; then
+  OLD_PID=$(cat "$LOCK_FILE")
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "[$(date)] 이미 실행 중인 데몬이 있습니다. (PID: $OLD_PID) 종료합니다."
+    exit 1
+  fi
+fi
+echo $$ > "$LOCK_FILE"
+trap "rm -f $LOCK_FILE; exit" INT TERM EXIT
+# ──────────────────────────────────────────────────────────────────────────────
+
+REPO_DIR="$HOME/google-ai-agent"
 cd "$REPO_DIR" || { echo "오류: 리포지토리 디렉토리를 찾을 수 없습니다: $REPO_DIR"; exit 1; }
 
-echo "[$(date)] 자동 배포 감시 데몬이 실행되었습니다. ($REPO_DIR)"
+echo "[$(date)] 자동 배포 감시 데몬이 실행되었습니다. (PID: $$, DIR: $REPO_DIR)"
 
 while true; do
   # 1. 원격 서버에서 최신 브랜치 상태 fetch
