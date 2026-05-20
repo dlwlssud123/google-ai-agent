@@ -97,12 +97,16 @@ export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
   const contents = documents.map((doc) => sanitizeText(doc.text));
 
   try {
-    await collection.add({
-      ids,
-      embeddings,
-      metadatas,
-      documents: contents,
-    });
+    // 너무 큰 JSON 페이로드는 네트워크 절단(Truncation)을 유발하므로 20개씩 청크 분할하여 적재
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      await collection.add({
+        ids: ids.slice(i, i + BATCH_SIZE),
+        embeddings: embeddings.slice(i, i + BATCH_SIZE),
+        metadatas: metadatas.slice(i, i + BATCH_SIZE),
+        documents: contents.slice(i, i + BATCH_SIZE),
+      });
+    }
     console.log(`${documents.length}개의 문서를 ChromaDB에 성공적으로 저장했습니다.`);
   } catch (error) {
     console.error("ChromaDB 문서 추가 중 오류 발생:", error);
@@ -122,6 +126,7 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
     const results = await collection.query({
       queryEmbeddings: [queryVector],
       nResults: limit,
+      include: ["documents", "metadatas", "distances"] as any,
     });
 
     // 결과를 가독성 좋은 객체 리스트로 매핑하여 반환
