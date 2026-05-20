@@ -497,9 +497,19 @@ export default function Home() {
       {showNewSessionModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-5">
-            <div>
-              <h2 className="text-base font-bold text-white">새 채팅방 만들기</h2>
-              <p className="text-[11px] text-zinc-400 mt-1">사용할 매뉴얼을 선택하면 해당 파일 범위 내에서만 RAG 검색합니다.</p>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white">새 채팅방 만들기</h2>
+                <p className="text-[11px] text-zinc-400 mt-1">사용할 매뉴얼을 선택하면 해당 파일 범위 내에서만 RAG 검색합니다.</p>
+              </div>
+              <button
+                onClick={() => setShowNewSessionModal(false)}
+                className="text-zinc-500 hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-800 transition-all shrink-0"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
             {/* 채팅방 이름 입력 */}
@@ -582,9 +592,19 @@ export default function Home() {
       {showFileModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
-            <div>
-              <h2 className="text-base font-bold text-white">파일 연결 관리</h2>
-              <p className="text-[11px] text-zinc-400 mt-1">현재 채팅방에서 RAG 검색에 사용할 파일을 선택하세요.</p>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white">파일 연결 관리</h2>
+                <p className="text-[11px] text-zinc-400 mt-1">현재 채팅방에서 RAG 검색에 사용할 파일을 선택하세요.</p>
+              </div>
+              <button
+                onClick={() => setShowFileModal(false)}
+                className="text-zinc-500 hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-800 transition-all shrink-0"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
             <div className="space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar pr-1">
               {manualFiles.map(file => {
