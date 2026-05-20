@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { askAgent, ChatResponse } from "./actions/chat";
+import { askAgent } from "./actions/chat";
 import { 
   uploadAndIngestFileAction, 
   getUploadedFilesAction, 
@@ -14,6 +14,7 @@ import {
   createSessionAction,
   updateSessionMessagesAction,
   deleteSessionAction,
+  updateSessionTitleAction,
   updateSessionManualsAction
 } from "./actions/sessionActions";
 
@@ -34,6 +35,18 @@ export interface ManualFile {
   status: "pending" | "success" | "failed";
 }
 
+interface ChatSessionView {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  manualIds: string[];
+  createdAt: string;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -41,7 +54,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // 멀티 세션 상태 관리
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<ChatSessionView[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   // 파일 업로드 및 실시간 RAG 적재 상태 관리
@@ -57,6 +70,9 @@ export default function Home() {
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingSessionTitle, setEditingSessionTitle] = useState("");
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
 
   // 파일 연결 관리 미니 모달 상태
   const [showFileModal, setShowFileModal] = useState(false);
@@ -69,24 +85,6 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
-
-  // 마운트 시 실시간 적재된 파일 목록 및 세션 로드
-  useEffect(() => {
-    fetchUploadedFiles();
-    fetchSessions();
-  }, []);
-
-  // pending 상태의 파일이 하나라도 있다면 백그라운드 인제스천 실시간 감지를 위해 4초 간격으로 폴링 수행
-  useEffect(() => {
-    const hasPending = manualFiles.some(file => file.status === "pending");
-    if (!hasPending) return;
-
-    const interval = setInterval(() => {
-      fetchUploadedFiles();
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [manualFiles]);
 
   const fetchUploadedFiles = async () => {
     try {
@@ -103,10 +101,11 @@ export default function Home() {
     try {
       const res = await getSessionsAction();
       if (res.success && res.sessions) {
-        setSessions(res.sessions);
+        const loadedSessions = res.sessions as ChatSessionView[];
+        setSessions(loadedSessions);
         
         // 만약 세션 목록이 비어 있으면, 기본 세션을 하나 자동 생성
-        if (res.sessions.length === 0) {
+        if (loadedSessions.length === 0) {
           const createRes = await createSessionAction("새로운 대화");
           if (createRes.success && createRes.session) {
             setSessions([createRes.session]);
@@ -115,16 +114,16 @@ export default function Home() {
           }
         } else {
           // targetSessionId 가 전달되면 해당 세션을 사용하고, 없으면 현재 선택된 세션이나 첫 번째 세션 사용
-          const nextSessionId = targetSessionId || currentSessionId || res.sessions[0].id;
+          const nextSessionId = targetSessionId || currentSessionId || loadedSessions[0].id;
           
           // 해당 세션이 실제로 존재하는지 체크
-          const exist = res.sessions.find((s: any) => s.id === nextSessionId);
+          const exist = loadedSessions.find((s) => s.id === nextSessionId);
           if (exist) {
             setCurrentSessionId(nextSessionId);
             setMessages(exist.messages || []);
           } else {
-            setCurrentSessionId(res.sessions[0].id);
-            setMessages(res.sessions[0].messages || []);
+            setCurrentSessionId(loadedSessions[0].id);
+            setMessages(loadedSessions[0].messages || []);
           }
         }
       }
@@ -132,6 +131,28 @@ export default function Home() {
       console.error("세션 목록 로드 실패:", e);
     }
   };
+
+  // 마운트 시 실시간 적재된 파일 목록 및 세션 로드
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      fetchUploadedFiles();
+      fetchSessions();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // pending 상태의 파일이 하나라도 있다면 백그라운드 인제스천 실시간 감지를 위해 4초 간격으로 폴링 수행
+  useEffect(() => {
+    const hasPending = manualFiles.some(file => file.status === "pending");
+    if (!hasPending) return;
+
+    const interval = setInterval(() => {
+      fetchUploadedFiles();
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [manualFiles]);
 
   // 특정 세션 선택 핸들러
   const handleSelectSession = (sessionId: string) => {
@@ -162,6 +183,46 @@ export default function Home() {
       console.error("신규 세션 생성 실패:", e);
     } finally {
       setShowNewSessionModal(false);
+    }
+  };
+
+  const handleStartRenameSession = (session: ChatSessionView, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingSessionId(session.id);
+    setEditingSessionTitle(session.title || "");
+  };
+
+  const handleCancelRenameSession = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation();
+    setEditingSessionId(null);
+    setEditingSessionTitle("");
+  };
+
+  const handleRenameSession = async (sessionId: string, e?: React.SyntheticEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+
+    const title = editingSessionTitle.trim();
+    if (!title) {
+      alert("대화방 이름을 입력해 주세요.");
+      return;
+    }
+
+    setRenamingSessionId(sessionId);
+    try {
+      const res = await updateSessionTitleAction(sessionId, title);
+      if (res.success && res.session) {
+        setSessions((prev) => prev.map((session) => (session.id === sessionId ? res.session : session)));
+        setEditingSessionId(null);
+        setEditingSessionTitle("");
+      } else {
+        alert(res.message || "대화방 이름을 저장하지 못했습니다.");
+      }
+    } catch (err) {
+      console.error("세션 이름 수정 실패:", err);
+      alert("대화방 이름을 저장하지 못했습니다.");
+    } finally {
+      setRenamingSessionId(null);
     }
   };
 
@@ -243,9 +304,9 @@ export default function Home() {
         setActionStage("error");
         setActionMessage(res.message || "적재 실패");
       }
-    } catch (err: any) {
+    } catch (err) {
       setActionStage("error");
-      setActionMessage(`처리 오류: ${err.message || err}`);
+      setActionMessage(`처리 오류: ${getErrorMessage(err)}`);
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
@@ -275,9 +336,9 @@ export default function Home() {
         setActionStage("error");
         setActionMessage(res.message || "삭제 실패");
       }
-    } catch (err: any) {
+    } catch (err) {
       setActionStage("error");
-      setActionMessage(`삭제 중 오류: ${err.message || err}`);
+      setActionMessage(`삭제 중 오류: ${getErrorMessage(err)}`);
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
@@ -304,9 +365,9 @@ export default function Home() {
         setActionStage("error");
         setActionMessage(res.message || "재임베딩 실패");
       }
-    } catch (err: any) {
+    } catch (err) {
       setActionStage("error");
-      setActionMessage(`동작 실패: ${err.message || err}`);
+      setActionMessage(`동작 실패: ${getErrorMessage(err)}`);
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
@@ -335,9 +396,9 @@ export default function Home() {
         setActionStage("error");
         setActionMessage(res.message || "삭제 실패");
       }
-    } catch (err: any) {
+    } catch (err) {
       setActionStage("error");
-      setActionMessage(`초기화 오류: ${err.message || err}`);
+      setActionMessage(`초기화 오류: ${getErrorMessage(err)}`);
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
@@ -691,32 +752,90 @@ export default function Home() {
               ) : (
                 sessions.map((session) => {
                   const isActive = session.id === currentSessionId;
+                  const isEditing = session.id === editingSessionId;
+                  const isRenaming = session.id === renamingSessionId;
                   return (
                     <div 
                       key={session.id} 
-                      onClick={() => handleSelectSession(session.id)}
-                      className={`flex justify-between items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-all border group ${
+                      onClick={isEditing ? undefined : () => handleSelectSession(session.id)}
+                      className={`flex justify-between items-center gap-2 px-3 py-1.5 rounded-lg transition-all border group ${
                         isActive 
                           ? "bg-indigo-600/10 border-indigo-500/30 text-zinc-100 shadow-inner" 
                           : "bg-transparent border-transparent hover:bg-zinc-900/30 hover:border-zinc-900 text-zinc-400 hover:text-zinc-200"
-                      }`}
+                      } ${isEditing ? "" : "cursor-pointer"}`}
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs shrink-0">💬</span>
-                        <span className="text-[11px] font-medium truncate" title={session.title}>
-                          {session.title}
-                        </span>
-                      </div>
-                      
-                      <button 
-                        onClick={(e) => handleDeleteSession(session.id, e)}
-                        className="text-zinc-500 hover:text-rose-400 p-0.5 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
-                        title="이 대화방 삭제"
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
+                      {isEditing ? (
+                        <form
+                          onSubmit={(e) => handleRenameSession(session.id, e)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex min-w-0 flex-1 items-center gap-1.5"
+                        >
+                          <input
+                            type="text"
+                            value={editingSessionTitle}
+                            onChange={(e) => setEditingSessionTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") handleCancelRenameSession(e);
+                            }}
+                            disabled={isRenaming}
+                            autoFocus
+                            maxLength={60}
+                            className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-[11px] font-medium text-zinc-100 outline-none transition focus:border-indigo-500 disabled:opacity-60"
+                          />
+                          <button
+                            type="submit"
+                            disabled={isRenaming}
+                            className="rounded-md p-1 text-emerald-400 transition hover:bg-emerald-500/10 hover:text-emerald-300 disabled:opacity-50"
+                            title="대화방 이름 저장"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelRenameSession}
+                            disabled={isRenaming}
+                            className="rounded-md p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+                            title="취소"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </form>
+                      ) : (
+                        <>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="text-xs shrink-0">💬</span>
+                            <span className="truncate text-[11px] font-medium" title={session.title}>
+                              {session.title}
+                            </span>
+                          </div>
+
+                          <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-all group-hover:opacity-100">
+                            <button
+                              onClick={(e) => handleStartRenameSession(session, e)}
+                              className="rounded p-0.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-indigo-300"
+                              title="대화방 이름 수정"
+                            >
+                              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.5 7.125L16.875 4.5" />
+                              </svg>
+                            </button>
+                            <button 
+                              onClick={(e) => handleDeleteSession(session.id, e)}
+                              className="rounded p-0.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-rose-400"
+                              title="이 대화방 삭제"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   );
                 })

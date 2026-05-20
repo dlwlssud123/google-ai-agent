@@ -275,6 +275,21 @@ export function updateSessionMessages(id: string, messages: any[]) {
   }
 }
 
+export function updateSessionTitle(id: string, title: string): ChatSession | null {
+  const db = initDB();
+  if (!db.sessions) db.sessions = [];
+
+  const normalizedTitle = title.trim();
+  if (!normalizedTitle) return null;
+
+  const session = db.sessions.find((s) => s.id === id);
+  if (!session) return null;
+
+  session.title = normalizedTitle;
+  saveDB(db);
+  return session;
+}
+
 export function deleteSession(id: string) {
   const db = initDB();
   if (!db.sessions) db.sessions = [];
