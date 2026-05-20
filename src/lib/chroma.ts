@@ -118,15 +118,22 @@ export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
  * 임베딩 벡터를 사용하여 유사한 문서 청크를 검색합니다.
  * @param queryVector 쿼리 텍스트의 임베딩 벡터
  * @param limit 가져올 상위 결과 개수 (기본값 Top 3)
+ * @param filterFileNames 검색 대상을 이 파일명 목록으로 제한 (세션별 RAG 분리용). 비어있으면 전체 검색.
  */
-export async function querySimilarityFromVectorDB(queryVector: number[], limit = 3) {
+export async function querySimilarityFromVectorDB(queryVector: number[], limit = 3, filterFileNames?: string[]) {
   const collection = await getOrCreateManualCollection();
+
+  // 검색 대상 파일 필터 구성 (세션에 연결된 파일만 검색)
+  const whereClause = filterFileNames && filterFileNames.length > 0
+    ? { source: { "$in": filterFileNames } } as any
+    : undefined;
 
   try {
     const results = await collection.query({
       queryEmbeddings: [queryVector],
       nResults: limit,
       include: ["documents", "metadatas", "distances"] as any,
+      ...(whereClause ? { where: whereClause } : {}),
     });
 
     // 결과를 가독성 좋은 객체 리스트로 매핑하여 반환

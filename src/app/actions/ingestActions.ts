@@ -4,15 +4,16 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { addManual, getManuals, deleteManual, clearAllData, updateManualStatus } from "@/lib/db";
+import { addManual, getManuals, deleteManual, clearAllData, updateManualStatus, updateSessionManuals, getSessions } from "@/lib/db";
 import { deleteDocumentsFromVectorDB, clearManualCollection } from "@/lib/chroma";
 
 const execPromise = promisify(exec);
 
 /**
  * 웹 프론트엔드로부터 파일을 받아 data/ 디렉터리에 저장한 뒤 실시간 RAG 임베딩(인제스천)을 트리거합니다.
+ * @param sessionId 업로드 후 자동으로 연결할 세션 ID
  */
-export async function uploadAndIngestFileAction(formData: FormData) {
+export async function uploadAndIngestFileAction(formData: FormData, sessionId?: string) {
   try {
     const file = formData.get("file") as File;
     if (!file) {
@@ -31,10 +32,23 @@ export async function uploadAndIngestFileAction(formData: FormData) {
     fs.writeFileSync(filePath, buffer);
 
     // 1. DB에 pending 상태로 파일 메타데이터 등록
-    addManual(file.name, file.size);
+    const newManual = addManual(file.name, file.size);
     console.log(`[Web Upload] 파일 디스크 저장 완료: ${file.name} (${file.size} bytes)`);
 
-    // 2. 실시간 인제스천을 백그라운드 프로세스로 비차단(non-blocking) 실행
+    // 2. 세션에 파일 연결 (업로드한 세션의 manualIds에 자동 추가)
+    if (sessionId) {
+      const sessions = getSessions();
+      const session = sessions.find(s => s.id === sessionId);
+      if (session) {
+        const currentIds = session.manualIds || [];
+        if (!currentIds.includes(newManual.id)) {
+          updateSessionManuals(sessionId, [...currentIds, newManual.id]);
+          console.log(`[Web Upload] 세션(${sessionId})에 파일(${newManual.id}) 연결 완료`);
+        }
+      }
+    }
+
+    // 3. 실시간 인제스천을 백그라운드 프로세스로 비차단(non-blocking) 실행
     // Next.js SSR Webpack 번들 내 pdfjs-dist worker 임포트 문제를 우회하기 위해 CLI 프로세스 격리 실행
     const command = `npx tsx src/scripts/ingest.ts --clearDB=false --file="${file.name}"`;
     console.log(`[Web Upload] 백그라운드 CLI 프로세스로 개별 파일 인제스천 가동: ${command}`);

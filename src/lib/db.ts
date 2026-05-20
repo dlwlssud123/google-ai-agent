@@ -24,6 +24,7 @@ export interface ChatSession {
   id: string;
   title: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
+  manualIds: string[]; // 이 세션에서 RAG 검색할 매뉴얼 ID 목록
   createdAt: string;
 }
 
@@ -237,7 +238,7 @@ export function getSessions(): ChatSession[] {
   return db.sessions || [];
 }
 
-export function createSession(title = "새로운 대화"): ChatSession {
+export function createSession(title = "새로운 대화", manualIds: string[] = []): ChatSession {
   const db = initDB();
   if (!db.sessions) db.sessions = [];
 
@@ -245,6 +246,7 @@ export function createSession(title = "새로운 대화"): ChatSession {
     id: `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
     title,
     messages: [],
+    manualIds,
     createdAt: new Date().toISOString(),
   };
 
@@ -279,4 +281,35 @@ export function deleteSession(id: string) {
 
   db.sessions = db.sessions.filter((s) => s.id !== id);
   saveDB(db);
+}
+
+/**
+ * 특정 세션에 연결된 매뉴얼 ID 목록을 갱신합니다.
+ */
+export function updateSessionManuals(sessionId: string, manualIds: string[]) {
+  const db = initDB();
+  if (!db.sessions) db.sessions = [];
+
+  const session = db.sessions.find((s) => s.id === sessionId);
+  if (session) {
+    session.manualIds = manualIds;
+    saveDB(db);
+  }
+}
+
+/**
+ * 특정 세션의 manualIds를 기반으로 실제 파일명(fileName) 배열을 반환합니다.
+ * ChromaDB where 필터에 사용됩니다.
+ */
+export function getSessionManualFileNames(sessionId: string): string[] {
+  const db = initDB();
+  if (!db.sessions) return [];
+
+  const session = db.sessions.find((s) => s.id === sessionId);
+  if (!session || !session.manualIds || session.manualIds.length === 0) return [];
+
+  const manualMap = new Map(db.manuals.map((m) => [m.id, m.fileName]));
+  return session.manualIds
+    .map((id) => manualMap.get(id))
+    .filter((name): name is string => !!name);
 }

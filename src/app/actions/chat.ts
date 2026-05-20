@@ -3,7 +3,7 @@
 import { getEmbedding, getGeminiClient, GENERATIVE_MODEL_NAME } from "../../lib/gemini";
 import { querySimilarityFromVectorDB } from "../../lib/chroma";
 import { SYSTEM_INSTRUCTION } from "../../lib/prompt";
-import { getCachedResponse, saveQACache } from "../../lib/db";
+import { getCachedResponse, saveQACache, getSessionManualFileNames } from "../../lib/db";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -56,14 +56,28 @@ function cleanAndParseJSON(rawResponse: string): ChatResponse {
  * 작업자의 에러 입력(증상)에 기반하여 ChromaDB 벡터 매핑 및 Gemini RAG 분석을 실행합니다.
  * @param query 사용자가 입력한 검색어 또는 증상
  * @param history 대화 흐름을 관리하기 위한 대화 목록 이력
+ * @param sessionId 현재 채팅 세션 ID (세션에 연결된 파일로만 RAG 검색 범위 제한)
  */
-export async function askAgent(query: string, history: ChatMessage[] = []): Promise<ChatResponse> {
+export async function askAgent(query: string, history: ChatMessage[] = [], sessionId?: string): Promise<ChatResponse> {
   if (!query || !query.trim()) {
     return {
       status: "fail-safe",
       answer: "올바른 에러 증상 혹은 키워드를 입력해 주십시오.",
       citations: [],
       nextSteps: []
+    };
+  }
+
+  // 세션에 연결된 파일 목록 조회 (RAG 검색 범위 제한용)
+  const filterFileNames = sessionId ? getSessionManualFileNames(sessionId) : [];
+
+  // 세션에 연결된 파일이 없으면 즉시 안내 반환 (LLM/ChromaDB 호출 절약)
+  if (sessionId && filterFileNames.length === 0) {
+    return {
+      status: "fail-safe",
+      answer: "이 채팅방에 연결된 매뉴얼이 없습니다. 사이드바에서 매뉴얼 파일을 업로드하거나 기존 파일을 연결해 주십시오.",
+      citations: [],
+      nextSteps: ["사이드바에서 PDF 또는 이미지 파일 업로드", "기존 파일 채팅방에 연결"]
     };
   }
 
@@ -85,8 +99,8 @@ export async function askAgent(query: string, history: ChatMessage[] = []): Prom
       };
     }
 
-    // 2. ChromaDB에서 상위 8개 유사 매뉴얼 단락 검색
-    const searchResults = await querySimilarityFromVectorDB(queryVector, 8);
+    // 2. ChromaDB에서 상위 8개 유사 매뉴얼 단락 검색 (세션 연결 파일로 범위 제한)
+    const searchResults = await querySimilarityFromVectorDB(queryVector, 8, filterFileNames.length > 0 ? filterFileNames : undefined);
 
     // [2단계: 토큰 세이버 - 로컬 유사도 컷오프 가드레일]
     // ChromaDB 코사인 거리가 0.82 이상(유사도가 매우 희박함)이거나 검색 데이터가 없다면

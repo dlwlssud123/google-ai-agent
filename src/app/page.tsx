@@ -13,7 +13,8 @@ import {
   getSessionsAction,
   createSessionAction,
   updateSessionMessagesAction,
-  deleteSessionAction
+  deleteSessionAction,
+  updateSessionManualsAction
 } from "./actions/sessionActions";
 
 export interface ChatMessage {
@@ -51,6 +52,14 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 새 채팅방 생성 모달 상태
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const [newSessionTitle, setNewSessionTitle] = useState("");
+  const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
+
+  // 파일 연결 관리 미니 모달 상태
+  const [showFileModal, setShowFileModal] = useState(false);
 
   // 스크롤 동기화
   const scrollToBottom = () => {
@@ -133,10 +142,17 @@ export default function Home() {
     }
   };
 
-  // 신규 세션 생성 핸들러
-  const handleCreateSession = async () => {
+  // 신규 세션 생성 핸들러 (모달 방식)
+  const handleOpenNewSession = () => {
+    setNewSessionTitle("");
+    setSelectedManualIds([]);
+    setShowNewSessionModal(true);
+  };
+
+  const handleConfirmNewSession = async () => {
     try {
-      const res = await createSessionAction("새로운 대화");
+      const title = newSessionTitle.trim() || "새로운 대화";
+      const res = await createSessionAction(title, selectedManualIds);
       if (res.success && res.session) {
         setSessions((prev) => [...prev, res.session]);
         setCurrentSessionId(res.session.id);
@@ -144,8 +160,29 @@ export default function Home() {
       }
     } catch (e) {
       console.error("신규 세션 생성 실패:", e);
+    } finally {
+      setShowNewSessionModal(false);
     }
   };
+
+  // 현재 세션의 파일 연결 토글 핸들러
+  const handleToggleManualForSession = async (manualId: string) => {
+    if (!currentSessionId) return;
+    const session = sessions.find(s => s.id === currentSessionId);
+    if (!session) return;
+
+    const current: string[] = session.manualIds || [];
+    const updated = current.includes(manualId)
+      ? current.filter((id: string) => id !== manualId)
+      : [...current, manualId];
+
+    await updateSessionManualsAction(currentSessionId, updated);
+    // 로컬 세션 상태 즉시 동기화
+    setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, manualIds: updated } : s));
+  };
+
+  // 현재 세션에 연결된 파일 목록 (파생)
+  const currentSessionManualIds: string[] = sessions.find(s => s.id === currentSessionId)?.manualIds || [];
 
   // 세션 개별 삭제 핸들러
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
@@ -195,7 +232,8 @@ export default function Home() {
       setActionStage("ingesting");
       setActionMessage("Gemini 임베딩 변환 및 ChromaDB 실시간 적재 중...");
       
-      const res = await uploadAndIngestFileAction(formData);
+      // 현재 세션 ID를 함꿭 전달 → 업로드 증했로드 세션에 자동 연결
+      const res = await uploadAndIngestFileAction(formData, currentSessionId ?? undefined);
 
       if (res.success) {
         setActionStage("success");
@@ -211,6 +249,8 @@ export default function Home() {
     } finally {
       setActionLoading(false);
       fetchUploadedFiles();
+      // 업로드 완료 후 로컀 세션 상태도 즉시 갱신 (새 파일이 manualIds에 등록됴으므로)
+      await fetchSessions(currentSessionId);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -326,7 +366,7 @@ export default function Home() {
       // 2. Server Action 호출 (RAG + Gemini 2.5)
       // 이전 히스토리는 RAG 메타데이터를 제외한 순수 {role, content} 배열만 전달
       const cleanHistory = newHistory.map(({ role, content }) => ({ role, content }));
-      const res = await askAgent(userText, cleanHistory.slice(0, -1));
+      const res = await askAgent(userText, cleanHistory.slice(0, -1), currentSessionId ?? undefined);
 
       // 3. 답변 및 이력 기록 저장
       const assistantMsg: ChatMessage = {
@@ -452,6 +492,138 @@ export default function Home() {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 text-zinc-100 overflow-hidden font-sans antialiased">
+
+      {/* ─── 새 채팅방 생성 모달 ─── */}
+      {showNewSessionModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-5">
+            <div>
+              <h2 className="text-base font-bold text-white">새 채팅방 만들기</h2>
+              <p className="text-[11px] text-zinc-400 mt-1">사용할 매뉴얼을 선택하면 해당 파일 범위 내에서만 RAG 검색합니다.</p>
+            </div>
+
+            {/* 채팅방 이름 입력 */}
+            <div>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-1.5">채팅방 이름 (선택)</label>
+              <input
+                type="text"
+                value={newSessionTitle}
+                onChange={e => setNewSessionTitle(e.target.value)}
+                placeholder="새로운 대화"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500/60"
+              />
+            </div>
+
+            {/* 매뉴얼 파일 선택 */}
+            <div>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block mb-1.5">
+                사용할 매뉴얼 선택 ({selectedManualIds.length}개 선택됨)
+              </label>
+              {manualFiles.length === 0 ? (
+                <div className="text-center py-6 bg-zinc-800/50 rounded-xl border border-zinc-700">
+                  <p className="text-[11px] text-zinc-500">업로드된 매뉴얼이 없습니다.</p>
+                  <p className="text-[10px] text-zinc-600 mt-1">채팅방 생성 후 파일을 업로드할 수 있습니다.</p>
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-52 overflow-y-auto custom-scrollbar pr-1">
+                  {manualFiles.map(file => {
+                    const checked = selectedManualIds.includes(file.id);
+                    return (
+                      <label
+                        key={file.id}
+                        className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                          checked
+                            ? "bg-indigo-950/30 border-indigo-500/40"
+                            : "bg-zinc-800/50 border-zinc-700/50 hover:border-zinc-600"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setSelectedManualIds(prev =>
+                            prev.includes(file.id)
+                              ? prev.filter(id => id !== file.id)
+                              : [...prev, file.id]
+                          )}
+                          className="accent-indigo-500 w-3.5 h-3.5 shrink-0"
+                        />
+                        <span className="text-sm shrink-0">{file.fileName.match(/\.(jpg|jpeg|png|gif)$/i) ? "🖼️" : "📄"}</span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold text-zinc-200 truncate">{file.fileName}</p>
+                          <p className="text-[9px] text-zinc-500">{formatBytes(file.fileSize)}</p>
+                        </div>
+                        {checked && <span className="ml-auto text-[10px] text-indigo-400 font-bold shrink-0">✔</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setShowNewSessionModal(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-zinc-700 text-sm text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleConfirmNewSession}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-bold text-white transition-all shadow-lg shadow-indigo-600/20"
+              >
+                대화 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 파일 연결 관리 모달 (기존 세션용) ─── */}
+      {showFileModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
+            <div>
+              <h2 className="text-base font-bold text-white">파일 연결 관리</h2>
+              <p className="text-[11px] text-zinc-400 mt-1">현재 채팅방에서 RAG 검색에 사용할 파일을 선택하세요.</p>
+            </div>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+              {manualFiles.map(file => {
+                const isLinked = currentSessionManualIds.includes(file.id);
+                return (
+                  <label
+                    key={file.id}
+                    className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                      isLinked
+                        ? "bg-indigo-950/30 border-indigo-500/40"
+                        : "bg-zinc-800/50 border-zinc-700/50 hover:border-zinc-600"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isLinked}
+                      onChange={() => handleToggleManualForSession(file.id)}
+                      className="accent-indigo-500 w-3.5 h-3.5 shrink-0"
+                    />
+                    <span className="text-sm shrink-0">{file.fileName.match(/\.(jpg|jpeg|png|gif)$/i) ? "🖼️" : "📄"}</span>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-zinc-200 truncate">{file.fileName}</p>
+                      <p className="text-[9px] text-zinc-500">{formatBytes(file.fileSize)}</p>
+                    </div>
+                    {isLinked && <span className="ml-auto text-[10px] text-indigo-400 font-bold shrink-0">✔ 연결됨</span>}
+                  </label>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setShowFileModal(false)}
+              className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-bold text-white transition-all"
+            >
+              완료
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 1. 사이드바 - 등록 매뉴얼 및 시스템 상태 모니터링 */}
       <aside
         className={`${
@@ -484,8 +656,8 @@ export default function Home() {
             <div className="flex justify-between items-center mb-2.5">
               <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">채팅 대화방</h3>
               <button 
-                onClick={handleCreateSession}
-                className="text-[9px] font-bold text-white bg-indigo-650 hover:bg-indigo-550 px-2 py-0.5 rounded border border-indigo-500/30 transition-all flex items-center gap-1 shadow-sm"
+                onClick={handleOpenNewSession}
+                className="text-[9px] font-bold text-white bg-indigo-600 hover:bg-indigo-500 px-2 py-0.5 rounded border border-indigo-500/30 transition-all flex items-center gap-1 shadow-sm"
               >
                 <span>+</span> 새 대화
               </button>
@@ -532,18 +704,29 @@ export default function Home() {
             </div>
           </div>
 
-          {/* 매뉴얼 적재 리스트 (동적 연동) */}
+          {/* 매뉴얼 적재 리스트 (현재 세션 연결 상태 표시 + 토글) */}
           <div>
             <div className="flex justify-between items-center mb-2.5">
-              <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">연동 및 적재 매뉴얼 ({manualFiles.length})</h3>
+              <div>
+                <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">연동 매뉴얼 ({currentSessionManualIds.length}/{manualFiles.length})</h3>
+                <p className="text-[9px] text-zinc-600 mt-0.5">이 채팅방에서 검색할 파일</p>
+              </div>
               <div className="flex gap-1.5">
+                <button 
+                  onClick={() => setShowFileModal(true)}
+                  disabled={manualFiles.length === 0}
+                  className="text-[9px] font-bold text-indigo-400 bg-zinc-850 hover:bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
+                  title="전체 파일 연결 관리"
+                >
+                  관리
+                </button>
                 <button 
                   onClick={handleForceRebuild}
                   disabled={actionLoading}
                   className="text-[9px] font-bold text-zinc-400 bg-zinc-850 hover:bg-zinc-800 hover:text-indigo-400 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
                   title="데이터베이스 전체 재임베딩 강제 실행"
                 >
-                  🔄 전체 갱신
+                  🔄 갱신
                 </button>
                 <button 
                   onClick={handleClearAll}
@@ -551,7 +734,7 @@ export default function Home() {
                   className="text-[9px] font-bold text-rose-400 bg-zinc-850 hover:bg-zinc-800 hover:text-rose-350 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors disabled:opacity-50"
                   title="모든 임베딩 및 원본 파일, 질문 캐시 영구 제거"
                 >
-                  🗑️ 전체 삭제
+                  🗑️ 삭제
                 </button>
               </div>
             </div>
@@ -563,36 +746,58 @@ export default function Home() {
                   <p className="text-[9px] text-zinc-600 mt-0.5">아래 드롭존에서 PDF를 업로드하세요.</p>
                 </div>
               ) : (
-                manualFiles.map((file) => (
-                  <div key={file.id} className="flex justify-between items-start gap-2 bg-zinc-900/40 p-2 rounded-lg border border-zinc-900/80 hover:border-zinc-850 transition-colors group">
-                    <div className="flex gap-2 min-w-0">
-                      <span className="text-sm shrink-0">📄</span>
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-zinc-200 truncate" title={file.fileName}>
-                          {file.fileName}
-                        </p>
-                        <p className="text-[9px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
-                          <span>{formatBytes(file.fileSize)}</span>
-                          <span>•</span>
-                          <span className={file.status === "success" ? "text-emerald-400 font-bold" : file.status === "pending" ? "text-amber-400 animate-pulse" : "text-rose-400"}>
-                            {file.status === "success" ? "적재완료" : file.status === "pending" ? "임베딩중" : "실패"}
-                          </span>
-                        </p>
+                manualFiles.map((file) => {
+                  const isLinked = currentSessionManualIds.includes(file.id);
+                  return (
+                    <div key={file.id} className={`flex justify-between items-start gap-2 p-2 rounded-lg border transition-colors group ${
+                      isLinked
+                        ? "bg-indigo-950/20 border-indigo-500/30"
+                        : "bg-zinc-900/40 border-zinc-900/80 opacity-50"
+                    }`}>
+                      <div className="flex gap-2 min-w-0">
+                        <span className="text-sm shrink-0">{file.fileName.match(/\.(jpg|jpeg|png|gif)$/i) ? "🖼️" : "📄"}</span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold text-zinc-200 truncate" title={file.fileName}>
+                            {file.fileName}
+                          </p>
+                          <p className="text-[9px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
+                            <span>{formatBytes(file.fileSize)}</span>
+                            <span>•</span>
+                            <span className={file.status === "success" ? "text-emerald-400 font-bold" : file.status === "pending" ? "text-amber-400 animate-pulse" : "text-rose-400"}>
+                              {file.status === "success" ? "적재완료" : file.status === "pending" ? "임베딩중" : "실패"}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-1 shrink-0">
+                        {/* 연결 토글 버튼 */}
+                        <button
+                          onClick={() => handleToggleManualForSession(file.id)}
+                          title={isLinked ? "이 채팅방에서 제외" : "이 채팅방에 연결"}
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-all ${
+                            isLinked
+                              ? "text-indigo-300 border-indigo-500/40 hover:text-rose-400 hover:border-rose-500/40"
+                              : "text-zinc-500 border-zinc-800 hover:text-indigo-400 hover:border-indigo-500/40"
+                          }`}
+                        >
+                          {isLinked ? "✔ 연결" : "+ 추가"}
+                        </button>
+                        {/* 영구 삭제 버튼 */}
+                        <button 
+                          onClick={() => handleFileDelete(file.id, file.fileName)}
+                          disabled={actionLoading}
+                          className="text-zinc-500 hover:text-rose-400 p-1 opacity-40 hover:opacity-100 transition-all rounded hover:bg-zinc-800"
+                          title="ChromaDB 및 디스크에서 즉시 영구 삭제"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
-                    
-                    <button 
-                      onClick={() => handleFileDelete(file.id, file.fileName)}
-                      disabled={actionLoading}
-                      className="text-zinc-500 hover:text-rose-400 p-1 opacity-40 hover:opacity-100 transition-all rounded hover:bg-zinc-800 shrink-0"
-                      title="ChromaDB 및 디스크에서 즉시 영구 삭제"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
