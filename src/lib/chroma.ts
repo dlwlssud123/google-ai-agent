@@ -68,15 +68,32 @@ interface IngestDocument {
 export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
   const collection = await getOrCreateManualCollection();
   
-  const ids = documents.map((doc) => doc.id);
-  const embeddings = documents.map((doc) => doc.vector);
-  const metadatas = documents.map((doc) => doc.metadata);
-  
-  // PDF 등에서 추출된 제어 문자, Null 바이트 등 ChromaDB JSON 파서 에러를 유발하는 문자열 정제
+  // PDF 등에서 추출된 제어 문자, Null 바이트, 반쪽짜리 써로게이트(Unpaired surrogate) 등 
+  // ChromaDB JSON 파서 에러를 유발하는 비정상 유니코드 문자열을 완벽하게 정제
   const sanitizeText = (text: string) => {
-    return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "");
+    if (!text) return "";
+    let clean = text;
+    // 최신 Node.js의 toWellFormed()를 이용해 깨진 유니코드 쌍을 U+FFFD로 치환
+    if (typeof clean.toWellFormed === "function") {
+      clean = clean.toWellFormed();
+    } else {
+      clean = clean.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|([^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "$1\uFFFD");
+    }
+    // 제어문자 및 U+FFFD 제거
+    return clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFFFD]/g, "");
   };
   
+  const ids = documents.map((doc) => sanitizeText(doc.id));
+  const embeddings = documents.map((doc) => doc.vector);
+  const metadatas = documents.map((doc) => {
+    const meta = { ...doc.metadata };
+    for (const key in meta) {
+      if (typeof meta[key] === "string") {
+        meta[key] = sanitizeText(meta[key]);
+      }
+    }
+    return meta;
+  });
   const contents = documents.map((doc) => sanitizeText(doc.text));
 
   try {
