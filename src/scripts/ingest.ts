@@ -93,10 +93,11 @@ export async function runIngestion(options: { clearDB?: boolean; freeTier?: bool
   }
 
   // freeTier 옵션에 따른 동시성 및 딜레이 설정
+  // 무료 제미나이 API는 분당 15회 호출 제한(RPM 15)이 있으므로, 안전하게 5초(5000ms) 간격을 둡니다.
   const concurrency = options.freeTier ? 1 : 3;
-  const delayMs = options.freeTier ? 4000 : 150;
+  const delayMs = options.freeTier ? 5000 : 150;
   const imgConcurrency = options.freeTier ? 1 : 2;
-  const imgDelayMs = options.freeTier ? 4000 : 150;
+  const imgDelayMs = options.freeTier ? 5000 : 150;
 
   // 대상 디렉터리를 docs/에서 data/로 완벽 단일화 이전
   const dataDir = path.resolve(process.cwd(), "data");
