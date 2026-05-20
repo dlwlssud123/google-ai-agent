@@ -67,6 +67,18 @@ export default function Home() {
     fetchSessions();
   }, []);
 
+  // pending 상태의 파일이 하나라도 있다면 백그라운드 인제스천 실시간 감지를 위해 4초 간격으로 폴링 수행
+  useEffect(() => {
+    const hasPending = manualFiles.some(file => file.status === "pending");
+    if (!hasPending) return;
+
+    const interval = setInterval(() => {
+      fetchUploadedFiles();
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [manualFiles]);
+
   const fetchUploadedFiles = async () => {
     try {
       const res = await getUploadedFilesAction();

@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { addManual, getManuals, deleteManual, clearAllData } from "@/lib/db";
+import { addManual, getManuals, deleteManual, clearAllData, updateManualStatus } from "@/lib/db";
 import { deleteDocumentsFromVectorDB, clearManualCollection } from "@/lib/chroma";
 
 const execPromise = promisify(exec);
@@ -34,17 +34,27 @@ export async function uploadAndIngestFileAction(formData: FormData) {
     addManual(file.name, file.size);
     console.log(`[Web Upload] 파일 디스크 저장 완료: ${file.name} (${file.size} bytes)`);
 
-    // 2. 실시간 인제스천 수행 (clearDB: false로 설정하여 기존 벡터 DB를 보존하고 누적 적재)
+    // 2. 실시간 인제스천을 백그라운드 프로세스로 비차단(non-blocking) 실행
     // Next.js SSR Webpack 번들 내 pdfjs-dist worker 임포트 문제를 우회하기 위해 CLI 프로세스 격리 실행
     const command = `npx tsx src/scripts/ingest.ts --clearDB=false`;
-    console.log(`[Web Upload] CLI 프로세스로 인제스천 가동: ${command}`);
-    const { stdout, stderr } = await execPromise(command, { env: process.env });
-    console.log("[CLI Ingest Output]", stdout);
-    if (stderr) console.warn("[CLI Ingest Warning]", stderr);
+    console.log(`[Web Upload] 백그라운드 CLI 프로세스로 인제스천 가동: ${command}`);
+    
+    // exec 에 콜백만 등록하고 비동기적으로 바로 반환
+    exec(command, { env: process.env }, (error, stdout, stderr) => {
+      console.log("[CLI Ingest Background Process Finished]");
+      if (stdout) console.log("[CLI Ingest Output]", stdout);
+      if (stderr) console.warn("[CLI Ingest Warning]", stderr);
+      if (error) {
+        console.error("[CLI Ingest Error]", error);
+        // 에러 발생 시 해당 매뉴얼 상태를 실패로 변경
+        const safeId = file.name.replace(/[^a-zA-Z0-9가-힣]/g, "_");
+        updateManualStatus(safeId, "failed");
+      }
+    });
     
     return { 
       success: true, 
-      message: `매뉴얼 '${file.name}' 업로드 및 RAG 적재 성공! (백그라운드 CLI 프로세스 반영 완료)` 
+      message: `매뉴얼 '${file.name}' 업로드 성공! 백그라운드에서 실시간 RAG DB 적재가 시작되었습니다. (완료 시 목록의 상태가 적재완료로 바뀝니다.)` 
     };
   } catch (error) {
     console.error("[Web Ingest Error] 파일 실시간 적재 실패:", error);
@@ -98,12 +108,31 @@ export async function deleteManualAction(id: string) {
 export async function forceRunIngestionAction() {
   try {
     const command = `npx tsx src/scripts/ingest.ts --clearDB=true`;
-    console.log(`[Web Rebuild] CLI 프로세스로 전체 인제스천 가동: ${command}`);
-    const { stdout, stderr } = await execPromise(command, { env: process.env });
-    console.log("[CLI Rebuild Output]", stdout);
-    if (stderr) console.warn("[CLI Rebuild Warning]", stderr);
+    console.log(`[Web Rebuild] 백그라운드 CLI 프로세스로 전체 인제스천 가동: ${command}`);
     
-    return { success: true, message: `인제스천 초기화 갱신 성공! (전체 재적재 완료)` };
+    // 전체 리셋 시작 전 모든 매뉴얼 상태를 pending으로 일시 지정
+    const files = getManuals();
+    for (const f of files) {
+      updateManualStatus(f.id, "pending");
+    }
+
+    exec(command, { env: process.env }, (error, stdout, stderr) => {
+      console.log("[CLI Rebuild Background Process Finished]");
+      if (stdout) console.log("[CLI Rebuild Output]", stdout);
+      if (stderr) console.warn("[CLI Rebuild Warning]", stderr);
+      if (error) {
+        console.error("[CLI Rebuild Error]", error);
+        // 에러 발생 시 대기 중인 모든 매뉴얼의 상태를 실패로 변경
+        const filesAfterError = getManuals();
+        for (const f of filesAfterError) {
+          if (f.status === "pending") {
+            updateManualStatus(f.id, "failed");
+          }
+        }
+      }
+    });
+    
+    return { success: true, message: "백그라운드에서 전체 인제스천 초기화 및 재빌드가 기동되었습니다." };
   } catch (error) {
     return { success: false, message: `인제스천 갱신 실패: ${(error as any).message || error}` };
   }
