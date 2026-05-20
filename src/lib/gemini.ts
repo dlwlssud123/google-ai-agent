@@ -51,21 +51,28 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 4, initialDel
   throw new Error("최대 재시도 횟수를 초과했습니다.");
 }
 
+import { pipeline, env } from "@xenova/transformers";
+
+// 로컬 환경 캐시 디렉터리 설정
+env.cacheDir = "./.cache/transformers";
+
+let embeddingPipeline: any = null;
+
 /**
- * 주어진 텍스트의 임베딩 벡터를 반환합니다.
+ * 주어진 텍스트의 임베딩 벡터를 반환합니다. (로컬 임베딩 전환)
  * @param text 임베딩할 문자열
- * @returns 768차원 또는 1536차원의 실수 배열 (임베딩 벡터)
+ * @returns 384차원의 실수 배열 (임베딩 벡터)
  */
 export async function getEmbedding(text: string): Promise<number[]> {
-  return callWithRetry(async () => {
-    const genAI = getGeminiClient();
-    const embedModel = genAI.getGenerativeModel({ model: EMBEDDING_MODEL_NAME });
-    const result = await embedModel.embedContent(text);
-    if (!result.embedding || !result.embedding.values) {
-      throw new Error("임베딩 반환 값에 데이터가 없습니다.");
-    }
-    return result.embedding.values;
-  });
+  if (!embeddingPipeline) {
+    console.log("[Transformers.js] 로컬 임베딩 모델 로딩 중... (최초 1회 다운로드 발생 가능)");
+    embeddingPipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    console.log("[Transformers.js] 임베딩 모델 로드 완료!");
+  }
+  
+  // 텍스트 임베딩 추출 (mean pooling + 정규화)
+  const result = await embeddingPipeline(text, { pooling: "mean", normalize: true });
+  return Array.from(result.data);
 }
 
 /**
