@@ -70,7 +70,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
     // 로컬 환경 캐시 디렉터리 설정 (Docker 내 nextjs 유저가 쓰기 권한이 있는 data/ 폴더 하위로 지정)
     env.cacheDir = path.resolve(process.cwd(), "data", ".cache", "transformers");
     
-    embeddingPipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+    embeddingPipeline = await pipeline("feature-extraction", "Xenova/paraphrase-multilingual-MiniLM-L12-v2");
     console.log("[Transformers.js] 임베딩 모델 로드 완료!");
   }
   
