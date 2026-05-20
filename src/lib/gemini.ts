@@ -51,10 +51,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 4, initialDel
   throw new Error("최대 재시도 횟수를 초과했습니다.");
 }
 
-import { pipeline, env } from "@xenova/transformers";
-
-// 로컬 환경 캐시 디렉터리 설정
-env.cacheDir = "./.cache/transformers";
+import path from "path";
 
 let embeddingPipeline: any = null;
 
@@ -66,6 +63,13 @@ let embeddingPipeline: any = null;
 export async function getEmbedding(text: string): Promise<number[]> {
   if (!embeddingPipeline) {
     console.log("[Transformers.js] 로컬 임베딩 모델 로딩 중... (최초 1회 다운로드 발생 가능)");
+    
+    // Webpack 번들링 및 SSR 런타임 충돌 방지를 위해 동적 임포트 사용
+    const { pipeline, env } = await import("@xenova/transformers");
+    
+    // 로컬 환경 캐시 디렉터리 설정 (Docker 내 nextjs 유저가 쓰기 권한이 있는 data/ 폴더 하위로 지정)
+    env.cacheDir = path.resolve(process.cwd(), "data", ".cache", "transformers");
+    
     embeddingPipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
     console.log("[Transformers.js] 임베딩 모델 로드 완료!");
   }
