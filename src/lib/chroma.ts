@@ -71,7 +71,13 @@ export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
   const ids = documents.map((doc) => doc.id);
   const embeddings = documents.map((doc) => doc.vector);
   const metadatas = documents.map((doc) => doc.metadata);
-  const contents = documents.map((doc) => doc.text);
+  
+  // PDF 등에서 추출된 제어 문자, Null 바이트 등 ChromaDB JSON 파서 에러를 유발하는 문자열 정제
+  const sanitizeText = (text: string) => {
+    return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "");
+  };
+  
+  const contents = documents.map((doc) => sanitizeText(doc.text));
 
   try {
     await collection.add({
