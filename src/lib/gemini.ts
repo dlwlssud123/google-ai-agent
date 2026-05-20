@@ -64,7 +64,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
   return callWithRetry(async () => {
     const genAI = getGeminiClient();
     // Gemini의 최신 고성능 텍스트 임베딩 모델 사용 (768차원, 의미 파악 능력이 로컬 모델보다 압도적으로 뛰어남)
-    const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL_NAME });
     const result = await model.embedContent(text);
     return result.embedding.values;
   });
