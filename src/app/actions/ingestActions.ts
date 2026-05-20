@@ -36,8 +36,8 @@ export async function uploadAndIngestFileAction(formData: FormData) {
 
     // 2. 실시간 인제스천을 백그라운드 프로세스로 비차단(non-blocking) 실행
     // Next.js SSR Webpack 번들 내 pdfjs-dist worker 임포트 문제를 우회하기 위해 CLI 프로세스 격리 실행
-    const command = `npx tsx src/scripts/ingest.ts --clearDB=false`;
-    console.log(`[Web Upload] 백그라운드 CLI 프로세스로 인제스천 가동: ${command}`);
+    const command = `npx tsx src/scripts/ingest.ts --clearDB=false --file="${file.name}"`;
+    console.log(`[Web Upload] 백그라운드 CLI 프로세스로 개별 파일 인제스천 가동: ${command}`);
     
     // exec 에 콜백만 등록하고 비동기적으로 바로 반환
     exec(command, { env: process.env }, (error, stdout, stderr) => {

@@ -82,6 +82,7 @@ async function runConcurrent<T, R>(
  * @param options clearDB: true이면 ChromaDB를 초기화하고 data/ 폴더 전체를 새로 적재합니다.
  */
 export async function runIngestion(options = { clearDB: true, freeTier: true }) {
+export async function runIngestion(options = { clearDB: true, freeTier: true, targetFile: "" }) {
   console.log("=== [3단계] 데이터 적재 파이프라인 (Data Ingestion) 시작 ===");
 
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -109,13 +110,19 @@ export async function runIngestion(options = { clearDB: true, freeTier: true }) 
 
   // data 폴더 내의 모든 PDF 파일 검색
   const filesInDocs = fs.readdirSync(dataDir);
-  const pdfFiles = filesInDocs.filter(file => path.extname(file).toLowerCase() === ".pdf");
+  let pdfFiles = filesInDocs.filter(file => path.extname(file).toLowerCase() === ".pdf");
+
+  // 특정 파일만 임베딩하도록 지정된 경우 필터링
+  if (options.targetFile) {
+    pdfFiles = pdfFiles.filter(f => f === options.targetFile);
+    console.log(`특정 파일 타겟팅 모드: ${options.targetFile} 파일만 임베딩합니다.`);
+  }
 
   console.log(`발견된 RAG PDF 파일 목록: ${pdfFiles.join(", ")}`);
 
   try {
     // 1. 기존 ChromaDB 컬렉션 비우기 (옵션에 따름)
-    if (options.clearDB) {
+    if (options.clearDB && !options.targetFile) {
       console.log("1. 기존 벡터 컬렉션 초기화 중...");
       try {
         await clearManualCollection();
@@ -135,7 +142,14 @@ export async function runIngestion(options = { clearDB: true, freeTier: true }) 
       const pdfPath = path.join(dataDir, pdfFile);
       console.log(`\n--- PDF 파일 처리 시작: ${pdfFile} ---`);
       
-      const stats = fs.statSync(pdfPath);
+      let stats;
+      try {
+        stats = fs.statSync(pdfPath);
+      } catch (e) {
+        console.warn(`[경고] 파일을 찾을 수 없어 건너뜁니다 (도중 삭제됨): ${pdfFile}`);
+        continue;
+      }
+      
       // DB 상태 기록용 데이터 등록 (pending)
       const safeId = pdfFile.replace(/[^a-zA-Z0-9가-힣]/g, "_");
       addManual(pdfFile, stats.size);
