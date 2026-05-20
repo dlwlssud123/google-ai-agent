@@ -81,8 +81,7 @@ async function runConcurrent<T, R>(
  * 인제스천 메인 실행 함수 (웹/서버액션에서 임포트 가능하도록 export)
  * @param options clearDB: true이면 ChromaDB를 초기화하고 data/ 폴더 전체를 새로 적재합니다.
  */
-export async function runIngestion(options = { clearDB: true, freeTier: true }) {
-export async function runIngestion(options = { clearDB: true, freeTier: true, targetFile: "" }) {
+export async function runIngestion(options: { clearDB?: boolean; freeTier?: boolean; targetFile?: string } = { clearDB: true, freeTier: true, targetFile: "" }) {
   console.log("=== [3단계] 데이터 적재 파이프라인 (Data Ingestion) 시작 ===");
 
   const geminiKey = process.env.GEMINI_API_KEY;
@@ -325,8 +324,11 @@ if (isDirectRun) {
   const freeTierArg = process.argv.find(arg => arg.startsWith("--freeTier="));
   const freeTier = freeTierArg ? freeTierArg.split("=")[1] === "true" : true;
   
-  console.log(`[CLI Run] 인제스천 실행 옵션 - clearDB: ${clearDB}, freeTier: ${freeTier}`);
-  runIngestion({ clearDB, freeTier })
+  const fileArg = process.argv.find(arg => arg.startsWith("--file="));
+  const targetFile = fileArg ? fileArg.split("=")[1] : "";
+  
+  console.log(`[CLI Run] 인제스천 실행 옵션 - clearDB: ${clearDB}, freeTier: ${freeTier}, targetFile: ${targetFile}`);
+  runIngestion({ clearDB, freeTier, targetFile })
     .then(() => {
       console.log("CLI 인제스천 성공적으로 완료");
       process.exit(0);
