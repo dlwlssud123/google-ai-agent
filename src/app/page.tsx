@@ -304,26 +304,6 @@ export default function Home() {
     }
   };
 
-  // 빠른 시작(Quick Starter) 질문 모음
-  const quickQuestions = [
-    {
-      label: "🎯 RAG 검색 정확도 목표",
-      text: "RAG 검색 정확도 정량적 목표가 무엇인가요?"
-    },
-    {
-      label: "📅 애자일 추진 일정",
-      text: "2단계 애자일 스프린트 추진 일정"
-    },
-    {
-      label: "🛡️ AI 할루시네이션 방지",
-      text: "AI 할루시네이션 가드레일 설계 원칙"
-    },
-    {
-      label: "⚠️ 무관한 에러 검증 (Fail-safe)",
-      text: "공장 모터 실린더 윤활유 과열 현상 어떻게 처리하나요?"
-    }
-  ];
-
   // AI 질의 수행 함수
   const handleSend = async (textToSend: string) => {
     if (!textToSend || !textToSend.trim() || loading) return;
@@ -736,28 +716,7 @@ export default function Home() {
                 </p>
               </div>
 
-              {/* 빠른 질문 */}
-              <div className="w-full space-y-2">
-                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider text-left pl-1">
-                  💡 추천 테스트 시나리오
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {quickQuestions.map((q, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleSend(q.text)}
-                      className="text-left bg-zinc-900/60 border border-zinc-800/80 hover:bg-zinc-800/70 hover:border-zinc-700 p-3 rounded-xl transition-all duration-200 group"
-                    >
-                      <p className="text-[11px] font-extrabold text-indigo-300 group-hover:text-indigo-200">
-                        {q.label}
-                      </p>
-                      <p className="text-[10px] text-zinc-400 truncate mt-0.5">
-                        {q.text}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </div>
           ) : (
             <div className="max-w-3xl mx-auto space-y-6">
@@ -922,6 +881,12 @@ export default function Home() {
                 )}
               </button>
             </form>
+
+            {/* 면책 고지 */}
+            <p className="mt-3 text-center text-[10px] text-zinc-600 leading-relaxed px-2">
+              ⚠️ 본 에이전트는 사내 매뉴얼에 기반한 참고 정보만을 제공하며, 실제 현장 조치에 대한 법적·기술적 책임을 지지 않습니다.
+              모든 최종 판단 및 조치는 반드시 담당 전문가의 확인 하에 수행하십시오.
+            </p>
 
           </div>
         </div>
