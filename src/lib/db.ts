@@ -28,10 +28,19 @@ export interface ChatSession {
   createdAt: string;
 }
 
+export interface FeedbackItem {
+  id: string;
+  query: string;
+  answer: string;
+  rating: "helpful" | "unhelpful";
+  createdAt: string;
+}
+
 export interface DatabaseSchema {
   manuals: ManualMetadata[];
   qa_cache: QACacheItem[];
   sessions?: ChatSession[];
+  feedbacks?: FeedbackItem[];
 }
 
 const DB_DIR = path.resolve(process.cwd(), "data");
@@ -44,7 +53,7 @@ function initDB(): DatabaseSchema {
   }
 
   if (!fs.existsSync(DB_PATH)) {
-    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [] };
+    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [], feedbacks: [] };
     fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2), "utf8");
     return initialData;
   }
@@ -55,10 +64,13 @@ function initDB(): DatabaseSchema {
     if (!data.sessions) {
       data.sessions = [];
     }
+    if (!data.feedbacks) {
+      data.feedbacks = [];
+    }
     return data;
   } catch (error) {
     console.error("[Local DB Error] db.json 파싱 오류, 초기화합니다.", error);
-    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [] };
+    const initialData: DatabaseSchema = { manuals: [], qa_cache: [], sessions: [], feedbacks: [] };
     fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2), "utf8");
     return initialData;
   }
@@ -226,6 +238,7 @@ export function clearAllData() {
   db.manuals = [];
   db.qa_cache = [];
   db.sessions = [];
+  db.feedbacks = [];
   saveDB(db);
 }
 
@@ -327,4 +340,25 @@ export function getSessionManualFileNames(sessionId: string): string[] {
   return session.manualIds
     .map((id) => manualMap.get(id))
     .filter((name): name is string => !!name);
+}
+
+/**
+ * 사용자 피드백 데이터를 로컬 데이터베이스에 저장합니다.
+ */
+export function saveFeedback(query: string, answer: string, rating: "helpful" | "unhelpful"): FeedbackItem {
+  const db = initDB();
+  if (!db.feedbacks) db.feedbacks = [];
+
+  const newFeedback: FeedbackItem = {
+    id: `feedback_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    query,
+    answer,
+    rating,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.feedbacks.push(newFeedback);
+  saveDB(db);
+  console.log(`[Local DB] 피드백 데이터 저장 성공: ${newFeedback.id} (${rating})`);
+  return newFeedback;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { askAgent } from "./actions/chat";
+import { askAgent, submitFeedbackAction } from "./actions/chat";
 import { 
   uploadAndIngestFileAction, 
   getUploadedFilesAction, 
@@ -76,6 +76,48 @@ export default function Home() {
 
   // 파일 연결 관리 미니 모달 상태
   const [showFileModal, setShowFileModal] = useState(false);
+
+  // PDF 뷰어 모달 상태
+  const [showPdfModal, setShowPdfModal] = useState(false);
+  const [pdfFileName, setPdfFileName] = useState("");
+  const [pdfPage, setPdfPage] = useState<number | null>(null);
+
+  // 피드백 완료 토스트 메시지 상태
+  const [feedbackToast, setFeedbackToast] = useState<{ show: boolean; message: string }>({ show: false, message: "" });
+
+  // 멀티모달 데모 이미지 상태
+  const [demoImageUrl, setDemoImageUrl] = useState<string | null>(null);
+  const [showMultimodalGuide, setShowMultimodalGuide] = useState(false);
+
+  // 피드백 제출 핸들러
+  const handleFeedback = async (queryText: string, answerText: string, rating: "helpful" | "unhelpful") => {
+    try {
+      const res = await submitFeedbackAction(queryText, answerText, rating);
+      if (res.success) {
+        setFeedbackToast({
+          show: true,
+          message: rating === "helpful" 
+            ? "👍 도움이 되었다고 평가해 주셨습니다. (RAG 검색 우선순위에 반영됩니다)" 
+            : "👎 도움이 되지 않았다고 평가해 주셨습니다."
+        });
+        setTimeout(() => {
+          setFeedbackToast({ show: false, message: "" });
+        }, 3500);
+      } else {
+        alert(res.message);
+      }
+    } catch (err) {
+      console.error("피드백 전송 실패:", err);
+    }
+  };
+
+  // PDF 뷰어 열기 핸들러
+  const handleOpenPdf = (source: string, page: number) => {
+    const baseName = source.split(/[\\/]/).pop() || source;
+    setPdfFileName(baseName);
+    setPdfPage(page);
+    setShowPdfModal(true);
+  };
 
   // 스크롤 동기화
   const scrollToBottom = () => {
@@ -1121,17 +1163,41 @@ export default function Home() {
                       {!isUser && responseData?.citations && responseData.citations.length > 0 && (
                         <div className="mt-4 pt-3 border-t border-zinc-800/50">
                           <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider mb-2">
-                            📖 매뉴얼 근거 및 출처 페이지
+                            📖 매뉴얼 근거 및 출처 페이지 (클릭 시 해당 페이지 뷰어 팝업)
                           </p>
                           <div className="flex flex-wrap gap-1.5">
                             {responseData.citations.map((cite, cIdx) => (
-                              <span
+                              <button
                                 key={cIdx}
-                                className="inline-flex items-center gap-1 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-[10px] text-indigo-300 font-semibold px-2 py-1 rounded-lg transition-colors cursor-default"
+                                onClick={() => handleOpenPdf(cite.source, cite.page)}
+                                className="inline-flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-[10px] text-indigo-300 hover:text-indigo-200 font-semibold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm"
                               >
                                 📄 {formatCitation(cite)}
-                              </span>
+                              </button>
                             ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 피드백 루프 버튼 영역 */}
+                      {!isUser && (
+                        <div className="mt-4 pt-3 border-t border-zinc-800/50 flex items-center justify-between gap-3 text-[10px] text-zinc-500">
+                          <span className="font-medium">💡 이 해결책이 설비 조치에 도움이 되었나요?</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => handleFeedback(messages[index - 1]?.content || "", responseData.content, "helpful")}
+                              className="inline-flex items-center gap-1 bg-zinc-950 border border-zinc-800 hover:border-emerald-500/40 hover:bg-emerald-950/10 text-[10px] text-zinc-300 hover:text-emerald-400 font-bold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                              title="도움됨"
+                            >
+                              👍 도움이 됨
+                            </button>
+                            <button
+                              onClick={() => handleFeedback(messages[index - 1]?.content || "", responseData.content, "unhelpful")}
+                              className="inline-flex items-center gap-1 bg-zinc-950 border border-zinc-800 hover:border-rose-500/40 hover:bg-rose-950/10 text-[10px] text-zinc-300 hover:text-rose-400 font-bold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                              title="도움안됨"
+                            >
+                              👎 도움이 안됨
+                            </button>
                           </div>
                         </div>
                       )}
@@ -1184,6 +1250,84 @@ export default function Home() {
         {/* 3. 하단 질의 입력 폼 */}
         <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-900 shrink-0 z-20">
           <div className="max-w-3xl mx-auto relative">
+            {/* 멀티모달 확장 로드맵 가이드 안내 UI */}
+            {showMultimodalGuide && (
+              <div className="absolute bottom-full mb-3 left-0 right-0 z-30 bg-zinc-900 border border-indigo-500/30 rounded-2xl p-4 shadow-2xl space-y-3">
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">📸</span>
+                    <h4 className="text-xs font-bold text-white">
+                      [로드맵] 멀티모달 비전 기반 장애 분석 기능 확장 안내
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-black text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">
+                    Phase 2 준비중
+                  </span>
+                </div>
+                
+                <p className="text-[11px] text-zinc-300 leading-relaxed">
+                  현재 버전은 텍스트(에러코드) RAG 중심으로 조치 사항을 반환합니다. 
+                  향후 **Phase 2 고도화** 시, 작업자가 현장 계기판이나 기계 외관 사진을 촬영하여 전송하면 
+                  **Gemini Vision 멀티모달 분석**을 통해 외관 상태(누유, 크랙) 및 수치를 자동 판독하고 
+                  즉각 장애 원인을 추론하는 기술적 확장이 예정되어 있습니다.
+                </p>
+
+                {/* 데모용 파일 업로드 컴포넌트 */}
+                <div className="bg-zinc-950/60 rounded-xl p-3 border border-zinc-800/80 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-zinc-400">📷 비전 분석 데모 시연하기</p>
+                    <p className="text-[9px] text-zinc-500 mt-0.5 truncate">현장 설비 사진을 업로드해 보세요 (미리보기 및 목업 분석 기능)</p>
+                  </div>
+                  <label className="bg-indigo-650 hover:bg-indigo-600 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg border border-indigo-500/20 cursor-pointer shrink-0 transition-colors">
+                    사진 업로드
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            setDemoImageUrl(reader.result as string);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {/* 이미지 미리보기 및 시뮬레이션 결과 */}
+                {demoImageUrl && (
+                  <div className="bg-indigo-950/20 rounded-xl p-3 border border-indigo-500/20 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-bold text-indigo-300">🖼️ 업로드된 현장 이미지</span>
+                      <button 
+                        onClick={() => setDemoImageUrl(null)}
+                        className="text-zinc-500 hover:text-zinc-300 text-[10px] cursor-pointer"
+                      >
+                        지우기
+                      </button>
+                    </div>
+                    <div className="flex gap-3">
+                      <img 
+                        src={demoImageUrl} 
+                        alt="Demo Target" 
+                        className="w-20 h-20 object-cover rounded-lg border border-zinc-800 shrink-0" 
+                      />
+                      <div className="text-[10px] leading-relaxed text-zinc-300 space-y-1">
+                        <p className="font-bold text-emerald-400">✓ [데모 분석 결과] 설비 식별 완료</p>
+                        <p>• 이미지 형태 분석: 유압 조절 밸브 및 디지털 압력계 감지</p>
+                        <p>• 계기판 수치 판독 (시뮬레이션): <strong>0.32 MPa</strong> (정상 범위 외 미달)</p>
+                        <p>• 권고 조치: 에러코드 <strong>E-02</strong>에 준하는 오일 누유 여부 검사 요망</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1191,6 +1335,25 @@ export default function Home() {
               }}
               className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-1.5 focus-within:border-indigo-600/60 focus-within:ring-1 focus-within:ring-indigo-600/30 transition-all duration-200"
             >
+              {/* 멀티모달 카메라/사진 단추 */}
+              <div className="relative shrink-0 pl-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMultimodalGuide(!showMultimodalGuide)}
+                  className={`flex items-center justify-center w-10 h-10 rounded-xl border transition-all duration-200 cursor-pointer ${
+                    showMultimodalGuide 
+                      ? "bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20" 
+                      : "bg-zinc-850 border-zinc-800 text-zinc-400 hover:text-zinc-250 hover:border-zinc-700"
+                  }`}
+                  title="멀티모달 카메라/사진 분석 안내"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </button>
+              </div>
+
               <input
                 type="text"
                 value={query}
@@ -1235,6 +1398,59 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* ─── 피드백 토스트 알림 ─── */}
+      {feedbackToast.show && (
+        <div className="fixed bottom-24 right-6 z-[100] bg-indigo-900 border border-indigo-500/40 text-indigo-100 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-2 max-w-sm">
+          <span className="text-base">✨</span>
+          <p className="text-[11px] font-bold leading-relaxed">{feedbackToast.message}</p>
+        </div>
+      )}
+
+      {/* ─── PDF 뷰어 모달 ─── */}
+      {showPdfModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-5xl h-[85vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-900/90 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">📄</span>
+                <div>
+                  <h2 className="text-sm font-bold text-white leading-none">{pdfFileName}</h2>
+                  <p className="text-[10px] text-indigo-400 font-semibold mt-1">
+                    매뉴얼 뷰어 {pdfPage ? `• p.${pdfPage} 바로 가기` : ""}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPdfModal(false);
+                  setPdfFileName("");
+                  setPdfPage(null);
+                }}
+                className="text-zinc-400 hover:text-zinc-100 p-1.5 rounded-xl hover:bg-zinc-800 transition-all cursor-pointer"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 bg-zinc-950 p-2 relative h-full">
+              {pdfFileName ? (
+                <iframe
+                  src={`/api/pdf?file=${encodeURIComponent(pdfFileName)}${pdfPage ? `#page=${pdfPage}` : ""}`}
+                  className="w-full h-full border-none rounded-xl bg-white"
+                  title="PDF Manual Viewer"
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center text-zinc-500 text-sm">
+                  불러올 PDF 매뉴얼이 없습니다.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

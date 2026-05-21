@@ -3,7 +3,8 @@
 import { getEmbedding, getGeminiClient, GENERATIVE_MODEL_NAME } from "../../lib/gemini";
 import { querySimilarityFromVectorDB } from "../../lib/chroma";
 import { SYSTEM_INSTRUCTION } from "../../lib/prompt";
-import { getCachedResponse, saveQACache, getSessionManualFileNames } from "../../lib/db";
+import { getCachedResponse, saveQACache, getSessionManualFileNames, saveFeedback } from "../../lib/db";
+import { filterSensitiveData } from "../../lib/security";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -68,6 +69,9 @@ export async function askAgent(query: string, history: ChatMessage[] = [], sessi
     };
   }
 
+  // 외부 LLM API 전송 및 RAG 조회가 일어나기 전 민감 개인정보 및 사내 기밀 단어 마스킹 처리
+  query = filterSensitiveData(query);
+
   // 세션에 연결된 파일 목록 조회 (RAG 검색 범위 제한용)
   const filterFileNames = sessionId ? getSessionManualFileNames(sessionId) : [];
 
@@ -115,9 +119,9 @@ export async function askAgent(query: string, history: ChatMessage[] = [], sessi
       
       return {
         status: "fail-safe",
-        answer: "죄송합니다. 입력하신 에러 현상 또는 질의에 관한 정확한 대응 규칙이 사내 소방 펌프 관리 매뉴얼(data/)에 기록되어 있지 않습니다. 작업자의 안전을 위해 임의 조치를 금하며, 즉시 비상 전원을 격리하고 유지보수 전문 파트너십 또는 정비 엔지니어에게 현장 정비 지원을 요청하십시오.",
+        answer: "죄송합니다. 입력하신 에러 현상 또는 질의에 대응하는 정확한 가이드라인이 현재 등록된 설비 유지보수 매뉴얼(data/)에서 발견되지 않았거나 검색 유사도가 너무 낮습니다. 작업자의 안전을 위해 자의적인 임의 조치를 절대 금하며, 즉시 기기 동작을 안전하게 멈추고 현장 전원을 확인한 뒤 사내 기술 정비 부서 또는 지정 전문 파트너 정비 엔지니어에게 기술 지원을 요청하십시오.",
         citations: [],
-        nextSteps: ["메인 전원 스위치 OFF 및 수동 대기 유도", "소방 안전 책임 관리실 연락", "data/ 폴더에 새 소방 매뉴얼 업로드 후 임베딩 갱신"],
+        nextSteps: ["메인 전원 스위치 차단 및 수동 제어 대기", "사내 기계/전기 안전 관리실 연락", "data/ 폴더에 새 설비 매뉴얼 업로드 후 임베딩 갱신"],
         isCached: false
       };
     }
@@ -193,5 +197,22 @@ ${historyText || "(이전 대화 내용 없음)"}
       citations: [],
       nextSteps: ["재시도 버튼 누르기", "장애 신고 접수"]
     };
+  }
+}
+
+/**
+ * 사용자 피드백을 저장하는 서버 액션입니다.
+ */
+export async function submitFeedbackAction(
+  query: string,
+  answer: string,
+  rating: "helpful" | "unhelpful"
+): Promise<{ success: boolean; message: string }> {
+  try {
+    saveFeedback(query, answer, rating);
+    return { success: true, message: "피드백이 성공적으로 기록되었습니다." };
+  } catch (error) {
+    console.error("[submitFeedbackAction Error]", error);
+    return { success: false, message: "피드백 기록 중 오류가 발생했습니다." };
   }
 }
