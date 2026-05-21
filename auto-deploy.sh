@@ -45,6 +45,10 @@ while true; do
     sudo docker-compose down
     sudo docker-compose up -d --build
     
+    # 컨테이너 재빌드 시 발생하는 호스트 폴더 권한 오류(Permission Denied) 자동 해결
+    sudo chmod -R 777 data
+    sudo chmod -R 777 chroma_db
+    
     echo "-------------------------------------------------------"
     echo "[$(date)] 자동 재적재 및 배포 갱신이 완료되었습니다."
     echo "======================================================="
