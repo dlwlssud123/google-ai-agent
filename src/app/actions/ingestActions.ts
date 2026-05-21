@@ -107,7 +107,15 @@ export async function deleteManualAction(id: string) {
     }
 
     // 3. ChromaDB에서 해당 소스 파일과 매칭되는 모든 임베딩 청크 제거 (멱등성 확보)
-    await deleteDocumentsFromVectorDB(fileName);
+    try {
+      await deleteDocumentsFromVectorDB(fileName);
+    } catch (chromaError) {
+      console.warn(`[Web Delete Warning] ChromaDB 청크 삭제 실패 (로컬 DB/디스크는 정상 삭제됨):`, chromaError);
+      return { 
+        success: true, 
+        message: `'${fileName}' 매뉴얼이 디스크 및 로컬 DB에서 제거되었으나, ChromaDB 연동 실패로 일부 청크가 남아있을 수 있습니다. (ChromaDB 데몬 상태를 확인하세요)` 
+      };
+    }
 
     return { success: true, message: `'${fileName}' 매뉴얼이 디렉터리 및 ChromaDB에서 완벽하게 제거되었습니다.` };
   } catch (error) {
@@ -157,10 +165,19 @@ export async function forceRunIngestionAction() {
  * RAG 시스템을 공장 초기화 상태로 되돌립니다.
  */
 export async function clearAllEmbeddingsAction() {
+  let chromaSuccess = true;
+  let chromaErrorMessage = "";
+
   try {
     // 1. ChromaDB의 매뉴얼 컬렉션 영구 삭제
-    await clearManualCollection();
-    console.log("[Web ClearAll] ChromaDB 컬렉션 삭제 완료");
+    try {
+      await clearManualCollection();
+      console.log("[Web ClearAll] ChromaDB 컬렉션 삭제 완료");
+    } catch (chromaError) {
+      chromaSuccess = false;
+      chromaErrorMessage = (chromaError as any).message || String(chromaError);
+      console.warn("[Web ClearAll Warning] ChromaDB 컬렉션 삭제 중 오류 발생:", chromaError);
+    }
 
     // 2. data/ 폴더 안의 db.json을 제외한 모든 실제 파일들 삭제
     const dataDir = path.resolve(process.cwd(), "data");
@@ -180,6 +197,13 @@ export async function clearAllEmbeddingsAction() {
     // 3. db.json 내의 manuals 및 qa_cache 데이터를 완전히 리셋
     clearAllData();
     console.log("[Web ClearAll] local db.json 데이터 초기화 완료");
+
+    if (!chromaSuccess) {
+      return { 
+        success: true, 
+        message: `디스크 파일과 로컬 DB는 완전히 초기화되었으나, ChromaDB 컬렉션 삭제에 실패했습니다: ${chromaErrorMessage} (ChromaDB 데몬 상태를 확인하세요)` 
+      };
+    }
 
     return { success: true, message: "모든 임베딩 데이터와 원본 파일, 질문 캐시가 완전히 삭제되었습니다." };
   } catch (error) {
