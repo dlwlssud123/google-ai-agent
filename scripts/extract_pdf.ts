@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-// @ts-ignore
-import pdf = require('pdf-parse');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdf = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string }>;
+
 
 async function extract() {
   const pdfPath = path.resolve('c:/Users/vbnm9/source/google-ai-agent/docs/UnHarenesedYU_이진녕_7614_A안.pdf');
