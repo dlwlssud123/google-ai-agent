@@ -1049,6 +1049,127 @@ export default function Home() {
 
       {/* 2. 메인 컨텐츠 영역 */}
       <div className="flex flex-1 flex-col h-full bg-zinc-950 overflow-hidden relative">
+
+        {/* ── 메시지 없을 때: ChatGPT 스타일 홈 화면 ── */}
+        {messages.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center px-4 pb-8">
+            {/* 모바일 사이드바 버튼 (헤더가 없으므로 별도 배치) */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden absolute top-4 left-4 p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800"
+            >
+              <svg className="w-5 h-5 text-zinc-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+
+            {/* 인사 텍스트 */}
+            <div className="text-center mb-8">
+              <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+                무슨 장애가 발생했나요?
+              </h1>
+              <p className="text-sm text-zinc-500">
+                에러 코드나 이상 증상을 입력하면 매뉴얼 기반으로 조치 절차를 안내합니다.
+              </p>
+            </div>
+
+            {/* 입력창 - 가운데 배치 */}
+            <div className="w-full max-w-2xl relative">
+              {showMultimodalGuide && (
+                <div className="absolute bottom-full mb-3 left-0 right-0 z-30 bg-zinc-900 border border-indigo-500/30 rounded-2xl p-4 shadow-2xl space-y-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">📸</span>
+                      <h4 className="text-xs font-bold text-white">[로드맵] 멀티모달 비전 기반 장애 분석 기능 확장 안내</h4>
+                    </div>
+                    <span className="text-[10px] font-black text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">Phase 2 준비중</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-300 leading-relaxed">
+                    현재 버전은 텍스트(에러코드) RAG 중심으로 조치 사항을 반환합니다. 향후 Phase 2 고도화 시, 작업자가 현장 계기판이나 기계 외관 사진을 촬영하여 전송하면 Gemini Vision 멀티모달 분석을 통해 외관 상태(누유, 크랙) 및 수치를 자동 판독하고 즉각 장애 원인을 추론하는 기술적 확장이 예정되어 있습니다.
+                  </p>
+                  {demoImageUrl && (
+                    <div className="bg-indigo-950/20 rounded-xl p-3 border border-indigo-500/20 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold text-indigo-300">🖼️ 업로드된 현장 이미지</span>
+                        <button onClick={() => setDemoImageUrl(null)} className="text-zinc-500 hover:text-zinc-300 text-[10px] cursor-pointer">지우기</button>
+                      </div>
+                      <div className="flex gap-3">
+                        <img src={demoImageUrl} alt="Demo" className="w-20 h-20 object-cover rounded-lg border border-zinc-800 shrink-0" />
+                        <div className="text-[10px] leading-relaxed text-zinc-300 space-y-1">
+                          <p className="font-bold text-emerald-400">✓ [데모 분석 결과] 설비 식별 완료</p>
+                          <p>• 이미지 형태 분석: 유압 조절 밸브 및 디지털 압력계 감지</p>
+                          <p>• 계기판 수치 판독 (시뮬레이션): <strong>0.32 MPa</strong> (정상 범위 외 미달)</p>
+                          <p>• 권고 조치: 에러코드 <strong>E-02</strong>에 준하는 오일 누유 여부 검사 요망</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => { e.preventDefault(); handleSend(query); }}
+                className="flex items-center gap-2 bg-zinc-900 border border-zinc-700 rounded-2xl p-1.5 focus-within:border-indigo-600/60 focus-within:ring-1 focus-within:ring-indigo-600/30 transition-all duration-200 shadow-xl shadow-black/30"
+              >
+                <div className="relative shrink-0 pl-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMultimodalGuide(!showMultimodalGuide)}
+                    className={`flex items-center justify-center w-10 h-10 rounded-xl border transition-all duration-200 cursor-pointer ${
+                      showMultimodalGuide
+                        ? "bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                        : "bg-zinc-850 border-zinc-800 text-zinc-400 hover:text-zinc-250 hover:border-zinc-700"
+                    }`}
+                    title="멀티모달 카메라/사진 분석 안내"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  disabled={loading}
+                  placeholder="장애 에러코드 혹은 이상 증상을 입력하십시오..."
+                  className="flex-1 bg-transparent text-sm text-zinc-100 placeholder-zinc-500 px-3 py-3 focus:outline-none disabled:opacity-50"
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={!query.trim() || loading}
+                  className="flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 text-white disabled:text-zinc-600 transition-all duration-200 shrink-0 shadow-lg shadow-indigo-600/20"
+                >
+                  <svg className="w-5 h-5 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
+                </button>
+              </form>
+
+              {/* 빠른 예시 질문 */}
+              <div className="flex flex-wrap justify-center gap-2 mt-4">
+                {["E-01 에러 코드 조치 방법", "유압 펌프 압력 저하", "모터 과열 알람 원인", "냉각수 누수 점검"].map((suggest) => (
+                  <button
+                    key={suggest}
+                    onClick={() => handleSend(suggest)}
+                    className="text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 hover:text-zinc-200 px-3 py-1.5 rounded-xl transition-all duration-150"
+                  >
+                    {suggest}
+                  </button>
+                ))}
+              </div>
+
+              <p className="mt-5 text-center text-[10px] text-zinc-700 leading-relaxed px-2">
+                ⚠️ 본 에이전트는 사내 매뉴얼에 기반한 참고 정보만을 제공합니다. 모든 최종 판단은 담당 전문가의 확인 하에 수행하십시오.
+              </p>
+            </div>
+          </div>
+
+        ) : (
+          // ── 메시지 있을 때: 일반 채팅 레이아웃 ──
+          <>
         {/* 상단 헤더 바 */}
         <header className="flex h-16 items-center justify-between border-b border-zinc-900 bg-zinc-950/70 backdrop-blur-md px-4 sm:px-6 shrink-0 z-30">
           <div className="flex items-center gap-3">
@@ -1397,6 +1518,8 @@ export default function Home() {
 
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* ─── 피드백 토스트 알림 ─── */}
