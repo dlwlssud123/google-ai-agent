@@ -451,7 +451,9 @@ export default function Home() {
 
   // AI 질의 수행 함수
   const handleSend = async (textToSend: string) => {
-    if (!textToSend || !textToSend.trim() || loading) return;
+    if (!textToSend || !textToSend.trim()) return;
+    // loading 중이면 강제 리셋 후 진행 (stuck 방지)
+    if (loading) setLoading(false);
 
     const userText = textToSend.trim();
     setQuery("");
@@ -1340,8 +1342,12 @@ export default function Home() {
                           {responseData.nextSteps.map((step, sIdx) => (
                             <button
                               key={sIdx}
-                              onClick={() => handleSend(step)}
-                              className="text-left text-[11px] font-bold text-zinc-300 bg-zinc-900 border border-zinc-800 hover:border-indigo-500/50 hover:bg-indigo-950/20 px-3 py-1.5 rounded-xl transition-all duration-200 shadow-sm"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSend(step);
+                              }}
+                              className="text-left text-[11px] font-bold text-zinc-300 bg-zinc-900 border border-zinc-800 hover:border-indigo-500/50 hover:bg-indigo-950/20 px-3 py-1.5 rounded-xl transition-all duration-200 shadow-sm cursor-pointer"
                             >
                               {step}
                             </button>
