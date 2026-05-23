@@ -140,9 +140,10 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
     const queryResults = [];
     if (results.ids && results.ids[0]) {
       for (let i = 0; i < results.ids[0].length; i++) {
+        const rawDist = results.distances?.[0]?.[i];
         queryResults.push({
           id: results.ids[0][i],
-          distance: results.distances ? results.distances[0][i] : null,
+          distance: (rawDist !== undefined && rawDist !== null) ? rawDist : null,
           metadata: results.metadatas ? results.metadatas[0][i] : null,
           document: results.documents ? results.documents[0][i] : null,
         });

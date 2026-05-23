@@ -107,15 +107,15 @@ export async function askAgent(query: string, history: ChatMessage[] = [], sessi
     const searchResults = await querySimilarityFromVectorDB(queryVector, 8, filterFileNames.length > 0 ? filterFileNames : undefined);
 
     // [2단계: 토큰 세이버 - 로컬 유사도 컷오프 가드레일]
-    // ChromaDB 코사인 거리가 0.82 이상(유사도가 매우 희박함)이거나 검색 데이터가 없다면
-    // 엉뚱한 질문으로 판정하여 LLM API 호출을 거치지 않고 로컬에서 즉시 fail-safe 반환
-    const limitDistance = 0.82;
-    const isIrrelevant = searchResults.length === 0 || 
-                         (searchResults[0].distance !== null && searchResults[0].distance > limitDistance);
+    // Cosine 거리 0~2 스케일에서 1.2 초과(유사도 매우 희박)인 경우만 차단
+    // distance가 null(ChromaDB 미반환)이면 안전하게 통과시켜 LLM 판단에 위임
+    const limitDistance = 1.2;
+    const topDistance = searchResults[0]?.distance;
+    const isIrrelevant = searchResults.length === 0 ||
+                         (topDistance !== null && topDistance !== undefined && topDistance > limitDistance);
 
     if (isIrrelevant) {
-      const topDistance = searchResults[0]?.distance;
-      console.log(`[🛡️ Local Guardrail Cutoff] 최고 유사도 점수 미달 (거리: ${topDistance !== null ? topDistance?.toFixed(4) : "없음"} > 임계치: ${limitDistance}). LLM 호출 차단.`);
+      console.log(`[🛡️ Local Guardrail Cutoff] 유사도 미달 차단 (거리: ${topDistance !== null && topDistance !== undefined ? topDistance.toFixed(4) : "측정불가"} > 임계치: ${limitDistance} / 결과수: ${searchResults.length})`);
       
       return {
         status: "fail-safe",
