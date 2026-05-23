@@ -123,37 +123,57 @@ export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
 export async function querySimilarityFromVectorDB(queryVector: number[], limit = 3, filterFileNames?: string[]) {
   const collection = await getOrCreateManualCollection();
 
-  // 검색 대상 파일 필터 구성 (세션에 연결된 파일만 검색)
-  const whereClause = filterFileNames && filterFileNames.length > 0
-    ? { source: { "$in": filterFileNames } } as any
-    : undefined;
+  // ChromaDB $in 연산자 호환성 문제로 whereClause 대신 클라이언트 사이드 필터링 사용
+  // 파일 필터가 있을 때는 더 많은 결과를 가져와서 JS에서 걸러냄
+  const fetchLimit = filterFileNames && filterFileNames.length > 0 ? limit * 5 : limit;
 
   try {
     const results = await collection.query({
       queryEmbeddings: [queryVector],
-      nResults: limit,
+      nResults: fetchLimit,
       include: ["documents", "metadatas", "distances"] as any,
-      ...(whereClause ? { where: whereClause } : {}),
     });
 
-    // 결과를 가독성 좋은 객체 리스트로 매핑하여 반환
+    // 결과를 가독성 좋은 객체 리스트로 매핑
     const queryResults = [];
     if (results.ids && results.ids[0]) {
       for (let i = 0; i < results.ids[0].length; i++) {
         const rawDist = results.distances?.[0]?.[i];
+        const meta = results.metadatas ? results.metadatas[0][i] : null;
+
+        // 파일 필터가 있을 때: source 필드가 필터 목록에 포함된 결과만 통과
+        if (filterFileNames && filterFileNames.length > 0) {
+          const docSource = (meta as any)?.source || "";
+          // 파일명 완전일치 또는 경로 끝 파일명 일치
+          const baseName = docSource.split(/[/\\]/).pop() || docSource;
+          const matched = filterFileNames.some(
+            (f) => f === docSource || f === baseName
+          );
+          if (!matched) continue;
+        }
+
         queryResults.push({
           id: results.ids[0][i],
           distance: (rawDist !== undefined && rawDist !== null) ? rawDist : null,
-          metadata: results.metadatas ? results.metadatas[0][i] : null,
+          metadata: meta,
           document: results.documents ? results.documents[0][i] : null,
         });
+
+        // 필요한 개수만큼 찼으면 중단
+        if (queryResults.length >= limit) break;
       }
     }
+
+    if (filterFileNames && filterFileNames.length > 0) {
+      console.log(`[ChromaDB] 파일 필터 적용: [${filterFileNames.join(", ")}] → ${queryResults.length}/${fetchLimit}개 결과`);
+    }
+
     return queryResults;
   } catch (error) {
     console.error("ChromaDB 유사도 검색 중 오류 발생:", error);
     throw error;
   }
+
 }
 
 /**
