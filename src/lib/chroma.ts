@@ -123,26 +123,31 @@ export async function addDocumentsToVectorDB(documents: IngestDocument[]) {
 export async function querySimilarityFromVectorDB(queryVector: number[], limit = 3, filterFileNames?: string[]) {
   const collection = await getOrCreateManualCollection();
 
-  // ChromaDB $in 연산자 호환성 문제로 whereClause 대신 클라이언트 사이드 필터링 사용
-  // 파일 필터가 있을 때는 더 많은 결과를 가져와서 JS에서 걸러냄
-  const fetchLimit = filterFileNames && filterFileNames.length > 0 ? limit * 5 : limit;
+  // 안전한 서버 사이드 필터 구성 ($in 호환성 우회를 위해 단일 비교 혹은 $or 조합 사용)
+  let whereClause: any = undefined;
+  if (filterFileNames && filterFileNames.length > 0) {
+    if (filterFileNames.length === 1) {
+      whereClause = { source: filterFileNames[0] };
+    } else {
+      whereClause = {
+        "$or": filterFileNames.map(f => ({ source: f }))
+      };
+    }
+  }
 
   try {
-    const results = await collection.query({
+    const queryParams: any = {
       queryEmbeddings: [queryVector],
-      nResults: fetchLimit,
+      nResults: limit,
       include: ["documents", "metadatas", "distances"] as any,
-    });
+    };
 
-    // 상세 디버깅 로그 추가
-    console.log(`[ChromaDB Debug] 쿼리 원본 결과 개수: ${results.ids?.[0]?.length || 0}`);
-    if (filterFileNames && filterFileNames.length > 0) {
-      console.log(`[ChromaDB Debug] 필터링 대상 파일 목록: ${JSON.stringify(filterFileNames)}`);
-      if (results.metadatas && results.metadatas[0]) {
-        const rawSources = results.metadatas[0].map(m => (m as any)?.source || "no-source");
-        console.log(`[ChromaDB Debug] 상위 ${fetchLimit}개 원본 문서 소스: ${JSON.stringify(rawSources)}`);
-      }
+    if (whereClause) {
+      queryParams.where = whereClause;
+      console.log(`[ChromaDB Server Filter] 적용 필터: ${JSON.stringify(whereClause)}`);
     }
+
+    const results = await collection.query(queryParams);
 
     // 결과를 가독성 좋은 객체 리스트로 매핑
     const queryResults = [];
@@ -151,34 +156,17 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
         const rawDist = results.distances?.[0]?.[i];
         const meta = results.metadatas ? results.metadatas[0][i] : null;
 
-        // 파일 필터가 있을 때: source 필드가 필터 목록에 포함된 결과만 통과
-        if (filterFileNames && filterFileNames.length > 0) {
-          const docSource = (meta as any)?.source || "";
-          // 파일명 완전일치 또는 경로 끝 파일명 일치
-          const baseName = docSource.split(/[/\\]/).pop() || docSource;
-          const matched = filterFileNames.some(
-            (f) => f === docSource || f === baseName
-          );
-          if (!matched) {
-            console.log(`[ChromaDB Debug] 필터 불일치 스킵: ${docSource} (Base: ${baseName}) vs 필터 목록`);
-            continue;
-          }
-        }
-
         queryResults.push({
           id: results.ids[0][i],
           distance: (rawDist !== undefined && rawDist !== null) ? rawDist : null,
           metadata: meta,
           document: results.documents ? results.documents[0][i] : null,
         });
-
-        // 필요한 개수만큼 찼으면 중단
-        if (queryResults.length >= limit) break;
       }
     }
 
     if (filterFileNames && filterFileNames.length > 0) {
-      console.log(`[ChromaDB] 파일 필터 적용: [${filterFileNames.join(", ")}] → ${queryResults.length}/${fetchLimit}개 결과`);
+      console.log(`[ChromaDB] 서버 필터 완료: [${filterFileNames.join(", ")}] → ${queryResults.length}개 결과`);
     }
 
     return queryResults;
@@ -186,7 +174,6 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
     console.error("ChromaDB 유사도 검색 중 오류 발생:", error);
     throw error;
   }
-
 }
 
 /**
