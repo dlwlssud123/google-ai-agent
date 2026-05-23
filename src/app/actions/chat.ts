@@ -89,9 +89,8 @@ export async function askAgent(query: string, history: ChatMessage[] = [], sessi
     // 1. 사용자 쿼리 임베딩 벡터 생성 (Embedding API는 일일 호출 한도가 매우 넉넉하여 안전함)
     const queryVector = await getEmbedding(query);
 
-    // [1단계: 토큰 세이버 - 의미 QA 캐싱 확인]
-    // 90% 이상 의미적으로 유사한 과거 질문이 데이터베이스에 등록되어 있다면 LLM 호출 생략
-    const cacheHit = getCachedResponse(queryVector, 0.90, filterFileNames.length > 0 ? filterFileNames : undefined);
+    // 96% 이상 의미적으로 거의 일치하는 과거 질문이 데이터베이스에 등록되어 있다면 LLM 호출 생략
+    const cacheHit = getCachedResponse(queryVector, 0.96, filterFileNames.length > 0 ? filterFileNames : undefined);
     if (cacheHit) {
       console.log(`[⚡ Semantic QA Cache Hit] 질문: "${query}" -> 캐시 히트 성공!`);
       return {
