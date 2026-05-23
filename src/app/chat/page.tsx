@@ -756,7 +756,11 @@ export default function Home() {
         } fixed inset-y-0 left-0 z-50 w-80 bg-zinc-900 border-r border-zinc-800 p-5 transition-transform duration-300 lg:relative lg:translate-x-0 flex flex-col shrink-0`}
       >
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-          <Link href="/" className="flex items-center gap-2.5 group" title="홈으로 이동">
+          <button
+            onClick={() => setMessages([])}
+            className="flex items-center gap-2.5 group text-left"
+            title="홈으로 이동"
+          >
             <div className="w-9 h-9 bg-indigo-600 group-hover:bg-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-600/30 transition-colors">
               <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -766,7 +770,7 @@ export default function Home() {
               <h2 className="text-sm font-bold text-white tracking-wide group-hover:text-indigo-300 transition-colors">UnHarnesedYU</h2>
               <span className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">RAG Control Center</span>
             </div>
-          </Link>
+          </button>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden p-1 rounded hover:bg-zinc-800">
             <svg className="w-6 h-6 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
