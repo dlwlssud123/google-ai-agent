@@ -201,7 +201,8 @@ export function saveQACache(
 
 export function getCachedResponse(
   queryVector: number[],
-  threshold = 0.95
+  threshold = 0.95,
+  filterFileNames?: string[]
 ): Omit<QACacheItem, "vector"> | null {
   const db = initDB();
   let bestMatch: QACacheItem | null = null;
@@ -217,6 +218,23 @@ export function getCachedResponse(
 
   // 기준 임계치 이상 매치되는 경우 캐시 히트(Cache Hit) 판정
   if (bestMatch && bestSimilarity >= threshold) {
+    // 세션별 매뉴얼 필터링이 존재할 때 캐시 답변의 출처들이 현재 세션에 유효한지 검증
+    if (filterFileNames && filterFileNames.length > 0) {
+      const cacheSources = bestMatch.citations.map(c => {
+        const src = c.source || "";
+        return src.split(/[/\\]/).pop() || src;
+      });
+
+      const hasUnrelatedSource = cacheSources.some(src => 
+        !filterFileNames.some(f => f === src || f.split(/[/\\]/).pop() === src)
+      );
+
+      if (hasUnrelatedSource) {
+        console.log(`[QA Cache Skip] 유사 캐시가 존재하지만, 현재 세션과 무관한 파일 출처(${JSON.stringify(cacheSources)})를 참고하고 있어 캐시를 스킵합니다.`);
+        return null;
+      }
+    }
+
     console.log(`[QA Cache Hit] 의미 유사도 매칭 성공! 점수: ${bestSimilarity.toFixed(4)} (임계치: ${threshold})`);
     const { vector, ...rest } = bestMatch;
     return rest;
