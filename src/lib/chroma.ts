@@ -134,6 +134,16 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
       include: ["documents", "metadatas", "distances"] as any,
     });
 
+    // 상세 디버깅 로그 추가
+    console.log(`[ChromaDB Debug] 쿼리 원본 결과 개수: ${results.ids?.[0]?.length || 0}`);
+    if (filterFileNames && filterFileNames.length > 0) {
+      console.log(`[ChromaDB Debug] 필터링 대상 파일 목록: ${JSON.stringify(filterFileNames)}`);
+      if (results.metadatas && results.metadatas[0]) {
+        const rawSources = results.metadatas[0].map(m => (m as any)?.source || "no-source");
+        console.log(`[ChromaDB Debug] 상위 ${fetchLimit}개 원본 문서 소스: ${JSON.stringify(rawSources)}`);
+      }
+    }
+
     // 결과를 가독성 좋은 객체 리스트로 매핑
     const queryResults = [];
     if (results.ids && results.ids[0]) {
@@ -149,7 +159,10 @@ export async function querySimilarityFromVectorDB(queryVector: number[], limit =
           const matched = filterFileNames.some(
             (f) => f === docSource || f === baseName
           );
-          if (!matched) continue;
+          if (!matched) {
+            console.log(`[ChromaDB Debug] 필터 불일치 스킵: ${docSource} (Base: ${baseName}) vs 필터 목록`);
+            continue;
+          }
         }
 
         queryResults.push({
